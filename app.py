@@ -119,7 +119,7 @@ if not ds.is_complete():
             with col.container(border=True):
                 st.markdown(f"**{r['name']}** · {r['pos']} {r['team']}")
                 st.metric("Proj points", f"{r['proj_points']:.0f}",
-                          delta=f"VONA {r['vona']:.0f}")
+                          delta=f"VONA {r['adj_vona']:.0f}")
                 st.caption(r["reasoning"])
 
 left, right = st.columns([3, 1])

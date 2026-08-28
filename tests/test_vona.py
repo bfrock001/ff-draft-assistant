@@ -1,7 +1,7 @@
 import pytest
 
-from pool import POSITIONS, PlayerPool
-from vona import needed_positions, vona_recommend
+from pool import PlayerPool
+from vona import roster_factor, roster_openings, vona_recommend
 
 
 def te_cliff_pool():
@@ -55,13 +55,42 @@ def test_last_pick_falls_back_to_best_value():
     assert recs[0]["vona"] == pytest.approx(recs[0]["proj_points"])
 
 
-def test_needed_positions():
-    assert needed_positions([]) == set(POSITIONS)
-    # QB slot filled -> QB no longer needed
-    assert "QB" not in needed_positions(["QB"])
-    # a full 9-starter roster -> nothing needed
-    full = ["QB", "RB", "RB", "WR", "WR", "TE", "RB", "DST", "K"]
-    assert needed_positions(full) == set()
+def test_roster_factor_downweights_filled_positions():
+    empty = roster_openings([])
+    assert roster_factor("RB", *empty) == 1.0
+    assert roster_factor("QB", *empty) == 1.0
+    # two RBs rostered: RB dedicated slots full -> FLEX-only (0.5); others 1.0
+    two_rb = roster_openings(["RB", "RB"])
+    assert roster_factor("RB", *two_rb) == 0.5
+    assert roster_factor("WR", *two_rb) == 1.0
+    assert roster_factor("TE", *two_rb) == 1.0
+    # full 9-starter roster -> everything is bench depth
+    full = roster_openings(["QB", "RB", "RB", "WR", "WR", "TE", "RB", "DST", "K"])
+    assert roster_factor("RB", *full) == 0.25
+    assert roster_factor("QB", *full) == 0.25
+
+
+def roster_construction_pool():
+    """RB has the steepest raw drop, but WR/TE also drop and QB is plentiful."""
+    return PlayerPool.from_records([
+        {"id": "RB_A", "name": "RB_A", "pos": "RB", "proj_points": 200, "espn_adp": 1},
+        {"id": "RB_B", "name": "RB_B", "pos": "RB", "proj_points": 120, "espn_adp": 30},
+        {"id": "WR_A", "name": "WR_A", "pos": "WR", "proj_points": 180, "espn_adp": 2},
+        {"id": "WR_B", "name": "WR_B", "pos": "WR", "proj_points": 120, "espn_adp": 31},
+        {"id": "TE_A", "name": "TE_A", "pos": "TE", "proj_points": 150, "espn_adp": 3},
+        {"id": "TE_B", "name": "TE_B", "pos": "TE", "proj_points": 90, "espn_adp": 32},
+        {"id": "QB_A", "name": "QB_A", "pos": "QB", "proj_points": 300, "espn_adp": 33},
+    ])
+
+
+def test_third_rb_deprioritized_when_two_already_rostered():
+    pool = roster_construction_pool()
+    # gap_opp = 3 -> RB_A/WR_A/TE_A gone; RB has the steepest drop-off
+    empty = vona_recommend(pool, set(), 10, 14, [], k=3)
+    assert empty[0]["pos"] == "RB"       # when I need RBs, the RB cliff leads
+    # but with two RBs already, a 3rd (FLEX-only) must not lead over open slots
+    two_rb = vona_recommend(pool, set(), 10, 14, ["RB", "RB"], k=3)
+    assert two_rb[0]["pos"] != "RB"
 
 
 def test_drafted_players_are_excluded():
