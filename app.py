@@ -17,6 +17,8 @@ import streamlit as st
 from board import SNAP_DATE, load_board
 from config import N_TEAMS
 from draft_state import DraftState, state_path
+from pool import PlayerPool
+from vona import vona_recommend
 
 st.set_page_config(page_title="Draft Assistant", layout="wide")
 
@@ -28,6 +30,11 @@ DISPLAY_COLS = ["rank", "name", "pos", "team", "bye", "tier", "proj_points",
 @st.cache_data
 def get_board():
     return load_board()
+
+
+@st.cache_resource
+def get_pool():
+    return PlayerPool.from_board(load_board())
 
 
 def team_label(t: int, my_slot: int) -> str:
@@ -96,6 +103,24 @@ h[1].metric("Round", "-" if ds.is_complete() else ds.current_round)
 h[2].metric("On the clock", "-" if oc is None else ("YOU" if mine_now else f"Team {oc}"))
 utn = ds.picks_until_my_turn()
 h[3].metric("Picks to my turn", "-" if utn is None else ("YOU'RE UP" if utn == 0 else utn))
+
+# --- recommendation cards (VONA, spec §8 fallback / §10 top) ---
+if not ds.is_complete():
+    upcoming = [p for p in ds.my_pick_numbers() if p >= ds.current_pick]
+    if upcoming:
+        my_pick = upcoming[0]
+        my_following = upcoming[1] if len(upcoming) > 1 else None
+        recs = vona_recommend(get_pool(), ds.drafted_ids(), my_pick, my_following,
+                              [p["pos"] for p in ds.my_roster()], k=3)
+        st.markdown("#### Recommended picks · VONA")
+        st.caption("You're on the clock." if my_pick == ds.current_pick
+                   else f"Targets for your next pick (overall {my_pick}).")
+        for col, r in zip(st.columns(3), recs):
+            with col.container(border=True):
+                st.markdown(f"**{r['name']}** · {r['pos']} {r['team']}")
+                st.metric("Proj points", f"{r['proj_points']:.0f}",
+                          delta=f"VONA {r['vona']:.0f}")
+                st.caption(r["reasoning"])
 
 left, right = st.columns([3, 1])
 
