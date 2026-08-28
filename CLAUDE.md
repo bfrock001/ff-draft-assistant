@@ -101,6 +101,6 @@ Python 3.12 + Streamlit; historical data via `nflreadpy` (maintained port of nfl
 - Install: `pip install -r requirements.txt`
 - Run tests: `pytest` (single test: `pytest tests/test_scoring.py::test_qb_line`)
 - Close the ID gate / refresh: `python loaders.py` — resolves the rankings against the crosswalk, writes `data/unmatched.csv`, exits non-zero if any top-200 player is unmatched. Fetches + caches `data/cache/ff_playerids.parquet` on first run (the one network touch; runtime is offline thereafter).
-- Run the app: `streamlit run app.py` (Phase 1+, not built yet).
+- Run the app: `streamlit run app.py` (or the `.claude/launch.json` "app" config).
 
-Modules: `config.py` (§1), `scoring.py` (§4), `ids.py` (§5), `loaders.py` (§3 + §5 gate). **Phase 0 complete** — 28 tests pass; zero unmatched in top 200. `data/cache/*.parquet` is gitignored (regenerated); `data/manual_id_overrides.csv` is hand-maintained input.
+Modules: `config.py` (§1), `scoring.py` (§4), `ids.py` (§5), `loaders.py` (§3 + §5 gate), `espn_adp.py` / `projections.py` (§3 snapshots → espn_adp + proj_points), `board.py` (§6 unified table), `draft_state.py` + `app.py` (§10 Streamlit board). **Phases 0 and 1 complete** — 39 tests pass; zero unmatched in top 200; full 160-pick mock over the real board with save/resume verified. `data/cache/*.parquet` and `state/*.json` are gitignored (regenerated); `data/manual_id_overrides.csv` is hand-maintained input.
