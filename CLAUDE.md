@@ -97,8 +97,10 @@ Key required tests: scoring (incl. D/ST tiers + FG distance bands) · snake pick
 
 ## Tooling / commands
 
-Python + Streamlit; historical data via `nflreadpy` (maintained port of nflreadr; `nfl_data_py` is the older package). No build/test tooling is committed yet — it will be established in Phase 0. Expected once implemented:
-- Run the app: `streamlit run app.py`
-- Run tests: `pytest` (single test: `pytest path::test_name`)
+Python 3.12 + Streamlit; historical data via `nflreadpy` (maintained port of nflreadr; `nfl_data_py` is the older package). Deps in `requirements.txt`; pytest configured in `pyproject.toml` (`pythonpath=["."]`, `testpaths=["tests"]`).
+- Install: `pip install -r requirements.txt`
+- Run tests: `pytest` (single test: `pytest tests/test_scoring.py::test_qb_line`)
+- Close the ID gate / refresh: `python loaders.py` — resolves the rankings against the crosswalk, writes `data/unmatched.csv`, exits non-zero if any top-200 player is unmatched. Fetches + caches `data/cache/ff_playerids.parquet` on first run (the one network touch; runtime is offline thereafter).
+- Run the app: `streamlit run app.py` (Phase 1+, not built yet).
 
-Update this section with the real commands once Phase 0 lands `requirements.txt`/`pyproject` and the test layout.
+Modules: `config.py` (§1), `scoring.py` (§4), `ids.py` (§5), `loaders.py` (§3 + §5 gate). **Phase 0 complete** — 28 tests pass; zero unmatched in top 200. `data/cache/*.parquet` is gitignored (regenerated); `data/manual_id_overrides.csv` is hand-maintained input.
