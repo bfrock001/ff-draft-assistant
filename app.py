@@ -9,6 +9,7 @@ Run:  streamlit run app.py
 from __future__ import annotations
 
 import datetime
+import math
 import os
 
 import streamlit as st
@@ -99,40 +100,18 @@ h[3].metric("Picks to my turn", "-" if utn is None else ("YOU'RE UP" if utn == 0
 left, right = st.columns([3, 1])
 
 with left:
-    # --- make a pick ---
     if ds.is_complete():
         st.success("Draft complete — all 160 picks are in.")
     else:
         st.subheader(f"Pick {ds.current_pick} · round {ds.current_round}")
-        pc = st.columns([1, 2, 1])
-        team = pc[0].selectbox(
-            "Drafted by", range(1, N_TEAMS + 1),
-            index=(oc - 1),
-            format_func=lambda t: team_label(t, ds.my_slot),
-            key=f"team_{ds.current_pick}",
-        )
-        ids = avail["canonical_id"].tolist()
-        labels = {
-            r.canonical_id: f"{r.name} — {r.pos} {r.team} (#{int(r.rank)})"
-            for r in avail.itertuples(index=False)
-        }
-        pid = pc[1].selectbox("Player", ids,
-                              format_func=lambda x: labels.get(x, x),
-                              key=f"player_{ds.current_pick}")
-        pc[2].write("")
-        pc[2].write("")
-        if pc[2].button("Draft", type="primary", width="stretch"):
-            row = board[board["canonical_id"] == pid].iloc[0]
-            ds.make_pick(pid, row["name"], row["pos"], team=team)
-            ds.save(SP)
-            st.rerun()
 
-    # --- the board ---
-    st.markdown("#### Available players")
+    # filters (reset to the full board each pick)
     fc = st.columns([1, 2])
-    pos_filter = fc[0].selectbox("Position",
-                                 ["All", "QB", "RB", "WR", "TE", "FLEX", "K", "DST"])
-    search = fc[1].text_input("Search", placeholder="player name…")
+    pos_filter = fc[0].selectbox(
+        "Position", ["All", "QB", "RB", "WR", "TE", "FLEX", "K", "DST"],
+        key=f"pos_{ds.current_pick}")
+    search = fc[1].text_input("Search", placeholder="player name…",
+                              key=f"search_{ds.current_pick}")
     view = avail
     if pos_filter == "FLEX":
         view = view[view["pos"].isin(["RB", "WR", "TE"])]
@@ -140,10 +119,40 @@ with left:
         view = view[view["pos"] == pos_filter]
     if search:
         view = view[view["name"].str.contains(search, case=False, na=False)]
-    st.dataframe(
-        view[DISPLAY_COLS].round({"proj_points": 1, "rank_sd": 1}),
-        hide_index=True, width="stretch", height=460,
-    )
+    view = view.reset_index(drop=True)
+    table = view[DISPLAY_COLS].round({"proj_points": 1, "rank_sd": 1})
+
+    if ds.is_complete():
+        st.dataframe(table, hide_index=True, width="stretch", height=460)
+    else:
+        st.caption("Click a player's row, set the team, then Draft.")
+        # key changes per pick and per filter so the selection never points at
+        # a stale row after a pick or a filter change.
+        sel = st.dataframe(
+            table, hide_index=True, width="stretch", height=420,
+            on_select="rerun", selection_mode="single-row",
+            key=f"board_{ds.current_pick}_{pos_filter}_{search}")
+        rows = sel.selection["rows"] if sel and sel.selection else []
+        if rows:
+            prow = view.iloc[rows[0]]
+            proj = prow["proj_points"]
+            proj_str = ("" if not isinstance(proj, (int, float)) or math.isnan(proj)
+                        else f" · proj {proj:.0f}")
+            cta = st.columns([3, 1, 1])
+            cta[0].markdown(f"**{prow['name']}** — {prow['pos']} {prow['team']} "
+                            f"· #{int(prow['rank'])}{proj_str}")
+            team = cta[1].selectbox(
+                "Drafted by", range(1, N_TEAMS + 1), index=(oc - 1),
+                format_func=lambda t: team_label(t, ds.my_slot),
+                key=f"team_{ds.current_pick}")
+            cta[2].write("")
+            if cta[2].button("Draft", type="primary", width="stretch"):
+                cid = prow["canonical_id"]
+                if not isinstance(cid, str):
+                    cid = f"NM_{prow['name']}"
+                ds.make_pick(cid, prow["name"], prow["pos"], team=team)
+                ds.save(SP)
+                st.rerun()
 
 with right:
     st.markdown("#### My roster")
