@@ -18,6 +18,7 @@ from board import SNAP_DATE, load_board
 from config import N_TEAMS
 from draft_state import DraftState, state_path
 from pool import PlayerPool
+from sim import recommend_sim
 from vona import vona_recommend
 
 st.set_page_config(page_title="Draft Assistant", layout="wide")
@@ -35,6 +36,18 @@ def get_board():
 @st.cache_resource
 def get_pool():
     return PlayerPool.from_board(load_board())
+
+
+@st.cache_data(show_spinner="Simulating the rest of the draft…")
+def sim_cached(drafted_key, roster_key, my_slot, my_pick, n_sims, sigma, risk_pct):
+    """Cached per draft state + settings, so it only recomputes on a new pick,
+    not on every filter/search rerun. Returns (recs, seconds_taken)."""
+    import time
+    t = time.perf_counter()
+    recs = recommend_sim(get_pool(), set(drafted_key), my_slot, my_pick,
+                         list(roster_key), n_sims=n_sims, sigma=sigma,
+                         risk_pct=risk_pct, seed=0)
+    return recs, time.perf_counter() - t
 
 
 def team_label(t: int, my_slot: int) -> str:
@@ -84,6 +97,17 @@ with st.sidebar:
         st.warning(f"Snapshot is {age} days old — consider refreshing.")
 
     st.divider()
+    engine = st.radio("Engine", ["VONA (instant)", "Simulation"], key="engine")
+    risk_pct, sim_sigma, sim_nsims, risk = 50, 8.0, 500, "Balanced"
+    if engine == "Simulation":
+        risk = st.select_slider("Risk dial", ["Safe", "Balanced", "Upside"],
+                                value="Balanced", key="risk")
+        risk_pct = {"Safe": 30, "Balanced": 50, "Upside": 70}[risk]
+        sim_sigma = st.slider("Opponent randomness σ", 0.0, 16.0, 8.0, 1.0, key="sigma")
+        sim_nsims = st.select_slider("Simulations", [250, 500, 1000], value=500,
+                                     key="nsims")
+
+    st.divider()
     if st.button("Undo last pick", disabled=len(ds.picks) == 0,
                  width="stretch"):
         ds.undo()
@@ -104,23 +128,39 @@ h[2].metric("On the clock", "-" if oc is None else ("YOU" if mine_now else f"Tea
 utn = ds.picks_until_my_turn()
 h[3].metric("Picks to my turn", "-" if utn is None else ("YOU'RE UP" if utn == 0 else utn))
 
-# --- recommendation cards (VONA, spec §8 fallback / §10 top) ---
+# --- recommendation cards (§8, §10 top) ---
 if not ds.is_complete():
     upcoming = [p for p in ds.my_pick_numbers() if p >= ds.current_pick]
     if upcoming:
         my_pick = upcoming[0]
-        my_following = upcoming[1] if len(upcoming) > 1 else None
-        recs = vona_recommend(get_pool(), ds.drafted_ids(), my_pick, my_following,
-                              [p["pos"] for p in ds.my_roster()], k=3)
-        st.markdown("#### Recommended picks · VONA")
-        st.caption("You're on the clock." if my_pick == ds.current_pick
-                   else f"Targets for your next pick (overall {my_pick}).")
-        for col, r in zip(st.columns(3), recs):
-            with col.container(border=True):
-                st.markdown(f"**{r['name']}** · {r['pos']} {r['team']}")
-                st.metric("Proj points", f"{r['proj_points']:.0f}",
-                          delta=f"VONA {r['adj_vona']:.0f}")
-                st.caption(r["reasoning"])
+        on_clock = ("You're on the clock." if my_pick == ds.current_pick
+                    else f"Targets for your next pick (overall {my_pick}).")
+        if engine == "Simulation":
+            recs, secs = sim_cached(
+                frozenset(ds.drafted_ids()),
+                tuple(p["player_id"] for p in ds.my_roster()),
+                ds.my_slot, my_pick, sim_nsims, sim_sigma, risk_pct)
+            over = "  ·  ⚠️ over 3s — lower Simulations" if secs > 3 else ""
+            st.markdown("#### Recommended picks · Simulation")
+            st.caption(f"{on_clock}  ·  {sim_nsims} sims · σ={sim_sigma:.0f} · "
+                       f"{risk} · {secs:.2f}s{over}")
+            for col, r in zip(st.columns(3), recs):
+                with col.container(border=True):
+                    st.markdown(f"**{r['name']}** · {r['pos']} {r['team']}")
+                    st.metric("Proj lineup", f"{r['score']:.0f}")
+                    st.caption(r["reasoning"])
+        else:
+            my_following = upcoming[1] if len(upcoming) > 1 else None
+            recs = vona_recommend(get_pool(), ds.drafted_ids(), my_pick, my_following,
+                                  [p["pos"] for p in ds.my_roster()], k=3)
+            st.markdown("#### Recommended picks · VONA")
+            st.caption(on_clock)
+            for col, r in zip(st.columns(3), recs):
+                with col.container(border=True):
+                    st.markdown(f"**{r['name']}** · {r['pos']} {r['team']}")
+                    st.metric("Proj points", f"{r['proj_points']:.0f}",
+                              delta=f"VONA {r['adj_vona']:.0f}")
+                    st.caption(r["reasoning"])
 
 left, right = st.columns([3, 1])
 
