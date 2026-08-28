@@ -1,0 +1,10 @@
+# Phase 0 foundation — pure logic + tests (installed and in use now)
+numpy>=1.26
+pandas>=2.0
+pytest>=8.0
+
+# Data half of Phase 0 + later phases. Uncomment/install before wiring the
+# nflreadpy loaders and the Streamlit UI.
+# polars>=1.0
+# nflreadpy>=0.1
+# streamlit>=1.30

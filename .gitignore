@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Cached nflreadpy pulls and live draft state are regenerated locally,
+# never committed. data/raw/ snapshots ARE committed (see spec §3).
+data/cache/
+state/
+*.parquet

@@ -1,0 +1,9 @@
+[project]
+name = "ff-draft-assistant"
+version = "0.0.0"
+description = "Local draft-day assistant for a 10-team PPR snake draft"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
