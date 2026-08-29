@@ -17,6 +17,7 @@ import streamlit as st
 from board import SNAP_DATE, load_board
 from config import N_TEAMS
 from draft_state import DraftState, state_path
+from explain import explain_candidate
 from pool import PlayerPool
 from sim import recommend_sim
 from vona import vona_recommend
@@ -133,12 +134,25 @@ if not ds.is_complete():
     upcoming = [p for p in ds.my_pick_numbers() if p >= ds.current_pick]
     if upcoming:
         my_pick = upcoming[0]
+        my_next_pick = upcoming[1] if len(upcoming) > 1 else None
+        roster_pos = [p["pos"] for p in ds.my_roster()]
+        pool = get_pool()
         on_clock = ("You're on the clock." if my_pick == ds.current_pick
                     else f"Targets for your next pick (overall {my_pick}).")
+
+        def why_expander(cid):  # offline, instant rationale (Phase 5)
+            idx = pool.id_to_idx.get(cid)
+            if idx is None:
+                return
+            with st.expander("Why?"):
+                exp = explain_candidate(pool, idx, ds.drafted_ids(), roster_pos,
+                                        my_pick, my_next_pick)
+                for line in exp["lines"]:
+                    st.markdown(f"- {line}")
+
         if engine == "Simulation":
             recs, secs = sim_cached(
-                frozenset(ds.drafted_ids()),
-                tuple(p["player_id"] for p in ds.my_roster()),
+                frozenset(ds.drafted_ids()), tuple(p["player_id"] for p in ds.my_roster()),
                 ds.my_slot, my_pick, sim_nsims, sim_sigma, risk_pct)
             over = "  ·  ⚠️ over 3s — lower Simulations" if secs > 3 else ""
             st.markdown("#### Recommended picks · Simulation")
@@ -149,10 +163,10 @@ if not ds.is_complete():
                     st.markdown(f"**{r['name']}** · {r['pos']} {r['team']}")
                     st.metric("Proj lineup", f"{r['score']:.0f}")
                     st.caption(r["reasoning"])
+                    why_expander(r["canonical_id"])
         else:
-            my_following = upcoming[1] if len(upcoming) > 1 else None
-            recs = vona_recommend(get_pool(), ds.drafted_ids(), my_pick, my_following,
-                                  [p["pos"] for p in ds.my_roster()], k=3)
+            recs = vona_recommend(pool, ds.drafted_ids(), my_pick, my_next_pick,
+                                  roster_pos, k=3)
             st.markdown("#### Recommended picks · VONA")
             st.caption(on_clock)
             for col, r in zip(st.columns(3), recs):
@@ -161,6 +175,7 @@ if not ds.is_complete():
                     st.metric("Proj points", f"{r['proj_points']:.0f}",
                               delta=f"VONA {r['adj_vona']:.0f}")
                     st.caption(r["reasoning"])
+                    why_expander(r["canonical_id"])
 
 left, right = st.columns([3, 1])
 
