@@ -10,3 +10,6 @@ venv/
 data/cache/
 state/
 *.parquet
+
+# stray root copy of the team logo (the tracked one is assets/logo.jpg)
+/Fantasy Helmet.jpg

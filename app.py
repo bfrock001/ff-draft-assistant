@@ -24,9 +24,12 @@ from pool import PlayerPool
 from sim import recommend_sim
 from vona import vona_recommend
 
-st.set_page_config(page_title="Draft Assistant", layout="wide")
+st.set_page_config(page_title="Who's Your Daddy? · Draft Assistant",
+                   page_icon="💀", layout="wide")
 
 SP = state_path(SNAP_DATE)
+LOGO = next((f"assets/logo.{ext}" for ext in ("png", "jpg", "jpeg", "webp")
+             if os.path.exists(f"assets/logo.{ext}")), None)
 DISPLAY_COLS = ["rank", "name", "pos", "team", "bye", "tier", "proj_points",
                 "rank_sd", "rank_best", "rank_worst", "espn_rank"]
 
@@ -93,6 +96,8 @@ avail = board[~board["canonical_id"].isin(drafted)]
 
 # --- sidebar: settings + data freshness + controls ---
 with st.sidebar:
+    if LOGO:
+        st.image(LOGO, width=220)
     st.header("Settings")
     if len(ds.picks) == 0:
         slot = st.selectbox("My draft slot", range(1, N_TEAMS + 1),
