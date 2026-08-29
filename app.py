@@ -12,12 +12,14 @@ import datetime
 import math
 import os
 
+import pandas as pd
 import streamlit as st
 
 from board import SNAP_DATE, load_board
 from config import N_TEAMS
 from draft_state import DraftState, state_path
 from explain import explain_candidate
+from history import game_log, load_weekly, mfl_to_gsis, season_summary
 from pool import PlayerPool
 from sim import recommend_sim
 from vona import vona_recommend
@@ -37,6 +39,16 @@ def get_board():
 @st.cache_resource
 def get_pool():
     return PlayerPool.from_board(load_board())
+
+
+@st.cache_resource
+def get_weekly():
+    return load_weekly()
+
+
+@st.cache_resource
+def get_mfl_gsis():
+    return mfl_to_gsis()
 
 
 @st.cache_data(show_spinner="Simulating the rest of the draft…")
@@ -246,3 +258,37 @@ with right:
     for p in reversed(ds.picks[-8:]):
         who = "YOU" if p["team"] == ds.my_slot else f"T{p['team']}"
         st.caption(f"{p['overall']}. [{who}] {p['player_name']} ({p['pos']})")
+
+# --- player detail / history drill-down (spec §10 bottom, Phase 4) ---
+st.divider()
+st.markdown("### Player detail")
+sel = st.selectbox("Inspect a player", board["name"].tolist(), key="detail_player")
+prow = board[board["name"] == sel].iloc[0]
+st.caption(f"{prow['pos']} {prow['team']} · proj {prow['proj_points']:.0f} · "
+           f"consensus rank {prow['consensus_rank']:.1f} "
+           f"(best {int(prow['rank_best'])} / worst {int(prow['rank_worst'])}, "
+           f"analyst spread ±{prow['rank_sd']:.1f})")
+
+gsis = get_mfl_gsis().get(str(prow["canonical_id"]))
+if prow["pos"] == "DST" or gsis is None:
+    st.info("No game-level history here — team D/ST (and a few unmatched players) "
+            "aren't in the weekly player data.")
+else:
+    weekly = get_weekly()
+    summ = season_summary(weekly, gsis)
+    st.dataframe(
+        pd.DataFrame(summ).rename(columns={
+            "season": "Season", "total": "PPR", "ppg": "PPG", "games": "G",
+            "boom_pct": "Boom% (≥20)", "bust_pct": "Bust% (≤5)", "missed": "Missed"}),
+        hide_index=True, width="stretch")
+    played = [s["season"] for s in summ if s["games"] > 0]
+    if played:
+        season = st.radio("Game log", played, horizontal=True,
+                          index=len(played) - 1, key="detail_season")
+        gl = (game_log(weekly, gsis, season).to_pandas()
+              .rename(columns={"week": "Wk", "opponent_team": "Opp", "ppr": "PPR"}))
+        gc, cc = st.columns(2)
+        gc.dataframe(gl, hide_index=True, width="stretch", height=320)
+        cc.bar_chart(gl.set_index("Wk")["PPR"], height=320)
+    else:
+        st.info("No 2023-2025 regular-season games (rookie or no data).")
