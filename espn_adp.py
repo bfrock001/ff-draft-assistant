@@ -80,10 +80,12 @@ def build_espn_adp(src: str, out: str):
 if __name__ == "__main__":
     from collections import Counter
 
+    import snapshots
     from loaders import load_rankings, resolve_rankings
 
-    SRC = "data/raw/2026-08-28/espn_ranks_2026-08-28.csv"
-    OUT = "data/raw/2026-08-28/espn_adp.csv"
+    _date = snapshots.active_snapshot()
+    SRC = snapshots.espn_raw_path(_date)
+    OUT = snapshots.espn_adp_path(_date)
     rows, unresolved = build_espn_adp(SRC, OUT)
     print(f"espn rows:        {len(rows)}  -> {OUT}")
     print(f"resolve methods:  {dict(Counter(r['method'] for r in rows))}")

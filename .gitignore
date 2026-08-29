@@ -13,3 +13,11 @@ state/
 
 # stray root copy of the team logo (the tracked one is assets/logo.jpg)
 /Fantasy Helmet.jpg
+
+# ESPN session cookies for the pre-draft ESPN update button (SENSITIVE — never commit).
+# Copy config/espn_cookies.example.json -> config/espn_cookies.json and fill it in.
+config/espn_cookies.json
+
+# Which dated snapshot the app currently reads — a local runtime selection,
+# not source (defaults to the most recent snapshot when absent).
+config/active_snapshot

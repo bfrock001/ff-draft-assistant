@@ -17,15 +17,17 @@ Documented approximations for the near-noise positions (§14.4):
 from __future__ import annotations
 
 import csv
+import os
 
 from ids import PlayerResolver, load_overrides
 from loaders import OVERRIDES_PATH, POS_TO_CROSSWALK, load_crosswalk
 from scoring import dst_points_allowed_points, score_stat_line
 
-SNAP = "data/raw/2026-08-28"
+# FantasyPros per-position projection exports. This module is the FantasyPros
+# *adapter*: the column maps (COLS/FPTS_COL below) are specific to their export
+# layout — a different source would supply its own adapter to the same schema.
 FILES = {"QB": "proj_qb.csv", "RB": "proj_rb.csv", "WR": "proj_wr.csv",
          "TE": "proj_te.csv", "K": "proj_k.csv", "DST": "proj_dst.csv"}
-OUT = f"{SNAP}/projections.csv"
 
 KICKER_FG_PTS = 3.5   # blended value of one made FG across §4 bands; tunable
 GAMES = 17
@@ -89,10 +91,10 @@ def proj_points_for(pos: str, line: dict) -> float:
     return score_stat_line(line)
 
 
-def load_projections() -> list[dict]:
+def load_projections(snap_dir: str) -> list[dict]:
     out = []
     for pos, fn in FILES.items():
-        for cells in _data_rows(f"{SNAP}/{fn}"):
+        for cells in _data_rows(os.path.join(snap_dir, fn)):
             if not cells or not cells[0].strip():
                 continue
             if "more rows removed" in cells[0]:
@@ -128,9 +130,10 @@ def resolve_projections(projs: list[dict], resolver: PlayerResolver):
     return matched, unmatched
 
 
-def build(out: str = OUT):
+def build(snap_dir: str, out: str | None = None):
+    out = out or os.path.join(snap_dir, "projections.csv")
     resolver = PlayerResolver(load_crosswalk(), overrides=load_overrides(OVERRIDES_PATH))
-    projs = load_projections()
+    projs = load_projections(snap_dir)
     matched, unmatched = resolve_projections(projs, resolver)
     with open(out, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=["canonical_id", "name", "team", "pos",
@@ -144,9 +147,13 @@ def build(out: str = OUT):
 if __name__ == "__main__":
     from collections import Counter
 
+    import snapshots
     from loaders import load_rankings, resolve_rankings
 
-    matched, unmatched = build()
+    _date = snapshots.active_snapshot()
+    snap_dir = snapshots.snapshot_dir(_date)
+    OUT = snapshots.projections_path(_date)
+    matched, unmatched = build(snap_dir, OUT)
     print(f"projection rows:  {len(matched)}  -> {OUT}")
     print(f"resolve methods:  {dict(Counter(m['method'] for m in matched))}")
     print(f"unmatched:        {len(unmatched)}")

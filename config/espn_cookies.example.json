@@ -1,0 +1,5 @@
+{
+  "_comment": "Copy this file to config/espn_cookies.json (git-ignored) and paste your ESPN session cookies. Find them in your browser: DevTools > Application > Storage > Cookies > https://fantasy.espn.com. These are sensitive; treat them like a password. If the ESPN update button ever stops working, re-grab them (they expire).",
+  "espn_s2": "PASTE_YOUR_espn_s2_VALUE_HERE",
+  "SWID": "{PASTE-YOUR-SWID-INCLUDING-THE-CURLY-BRACES}"
+}

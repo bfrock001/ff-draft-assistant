@@ -21,7 +21,6 @@ import polars as pl
 from ids import PlayerResolver, load_overrides
 
 CACHE_CROSSWALK = "data/cache/ff_playerids.parquet"
-RANKINGS_2026_08_28 = "data/raw/2026-08-28/rankings_ppr_consensus_2026-08-28.csv"
 OVERRIDES_PATH = "data/manual_id_overrides.csv"
 UNMATCHED_PATH = "data/unmatched.csv"
 
@@ -67,8 +66,14 @@ def load_crosswalk(path: str = CACHE_CROSSWALK) -> list[dict]:
     return players
 
 
-def load_rankings(path: str = RANKINGS_2026_08_28) -> list[dict]:
-    """Load a consensus rankings snapshot, sorted by consensus rank (rank_ecr)."""
+def load_rankings(path: str | None = None) -> list[dict]:
+    """Load a consensus rankings snapshot, sorted by consensus rank (rank_ecr).
+
+    Defaults to the active snapshot's rankings file.
+    """
+    if path is None:
+        import snapshots
+        path = snapshots.rankings_path(snapshots.active_snapshot())
     rows = []
     with open(path, newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f):
@@ -109,32 +114,48 @@ def write_unmatched(unmatched: list[dict], path: str = UNMATCHED_PATH) -> None:
             w.writerow([r["rank"], r["name"], r["pos"], r["team"]])
 
 
-def run_gate(top_n: int = 200) -> int:
-    """Resolve the rankings, write data/unmatched.csv, report top-N unmatched.
+def gate_report(rankings_path: str | None = None, top_n: int = 200,
+                write: bool = True) -> dict:
+    """Resolve a rankings file against the crosswalk and summarize the ID gate.
 
-    Returns the count of unmatched players inside the top N by consensus rank
-    (the Phase 0 acceptance number, which must be 0).
+    Returns a dict with counts, per-method breakdown for the top N, and the list
+    of unmatched top-N players (the Phase 0 acceptance number — must be empty).
+    Pure/programmatic (the refresh flow calls this); ``write`` controls whether
+    data/unmatched.csv is (re)written.
     """
     overrides = load_overrides(OVERRIDES_PATH) if os.path.exists(OVERRIDES_PATH) else {}
     resolver = PlayerResolver(load_crosswalk(), overrides=overrides)
-    rankings = load_rankings()
+    rankings = load_rankings(rankings_path)
     matched, unmatched = resolve_rankings(rankings, resolver)
-    write_unmatched(unmatched)
+    if write:
+        write_unmatched(unmatched)
 
     top_unmatched = [r for r in unmatched if r["rank"] <= top_n]
-    methods = {}
+    methods: dict[str, int] = {}
     for m in matched:
         if m["rank"] <= top_n:
             methods[m["method"]] = methods.get(m["method"], 0) + 1
+    return {
+        "n_rankings": len(rankings), "n_matched": len(matched),
+        "n_unmatched": len(unmatched), "top_n": top_n,
+        "top_methods": methods, "top_unmatched": top_unmatched,
+    }
 
-    print(f"rankings rows:        {len(rankings)}")
-    print(f"matched (all):        {len(matched)}")
-    print(f"unmatched (all):      {len(unmatched)}  -> {UNMATCHED_PATH}")
-    print(f"top-{top_n} match methods:  {methods}")
-    print(f"UNMATCHED IN TOP {top_n}:   {len(top_unmatched)}")
-    for r in top_unmatched:
+
+def run_gate(top_n: int = 200) -> int:
+    """CLI: resolve the active rankings, write data/unmatched.csv, print a report.
+
+    Returns the count of unmatched players inside the top N (must be 0).
+    """
+    g = gate_report(top_n=top_n)
+    print(f"rankings rows:        {g['n_rankings']}")
+    print(f"matched (all):        {g['n_matched']}")
+    print(f"unmatched (all):      {g['n_unmatched']}  -> {UNMATCHED_PATH}")
+    print(f"top-{top_n} match methods:  {g['top_methods']}")
+    print(f"UNMATCHED IN TOP {top_n}:   {len(g['top_unmatched'])}")
+    for r in g["top_unmatched"]:
         print(f"    #{r['rank']:>3} {r['name']} ({r['pos']} {r['team']})")
-    return len(top_unmatched)
+    return len(g["top_unmatched"])
 
 
 if __name__ == "__main__":
