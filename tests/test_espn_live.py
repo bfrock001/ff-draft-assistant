@@ -66,3 +66,25 @@ def test_cookies_ok(tmp_path):
     assert espn_live.cookies_configured(str(p)) is True
     c = espn_live.load_cookies(str(p))
     assert c == {"espn_s2": "realtoken", "SWID": "{ABC-123}"}
+
+
+DRAFT_PAYLOAD = {"draftDetail": {"inProgress": True, "drafted": False, "picks": [
+    {"overallPickNumber": 3, "roundId": 1, "roundPickNumber": 3, "teamId": 5, "playerId": 3117251},
+    {"overallPickNumber": 1, "roundId": 1, "roundPickNumber": 1, "teamId": 3, "playerId": 4262921},
+    {"overallPickNumber": 2, "roundId": 1, "roundPickNumber": 2, "teamId": 4, "playerId": -1},  # not made
+]}}
+
+
+def test_parse_draft_picks_only_made_and_sorted():
+    st = espn_live.parse_draft_picks(DRAFT_PAYLOAD)
+    assert st["in_progress"] is True and st["drafted"] is False
+    assert [p["overall"] for p in st["picks"]] == [1, 3]          # -1 dropped, sorted
+    assert st["picks"][0]["espn_id"] == "4262921" and st["picks"][0]["team_id"] == 3
+    assert st["picks"][1]["espn_id"] == "3117251"
+
+
+def test_parse_draft_picks_empty_before_draft():
+    data = {"draftDetail": {"inProgress": False, "drafted": False,
+                            "picks": [{"overallPickNumber": 1, "playerId": -1}]}}
+    st = espn_live.parse_draft_picks(data)
+    assert st["picks"] == [] and st["in_progress"] is False

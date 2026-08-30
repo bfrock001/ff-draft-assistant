@@ -130,3 +130,86 @@ def write_raw(rows: list[dict], path: str) -> None:
         w = csv.DictWriter(f, fieldnames=RAW_FIELDS)
         w.writeheader()
         w.writerows(rows)
+
+
+# --- live draft sync (spec §3.2 stretch) --------------------------------------
+# ESPN's mDraftDetail view pre-creates all N pick slots with playerId = -1; each
+# slot's playerId fills in as that pick is made. Polling it and reading the
+# filled-in slots is the live board. Optional and pre/in-draft only; the app
+# always keeps manual entry as the fallback.
+
+def parse_draft_picks(data: dict) -> dict:
+    """Extract the picks MADE so far (playerId != -1) from an mDraftDetail
+    payload, in overall-pick order. Offline / unit-testable."""
+    dd = data.get("draftDetail", {}) or {}
+    made = []
+    for p in dd.get("picks", []) or []:
+        pid = p.get("playerId", -1)
+        if pid in (None, -1):
+            continue
+        made.append({
+            "overall": p.get("overallPickNumber"),
+            "round": p.get("roundId"),
+            "round_pick": p.get("roundPickNumber"),
+            "team_id": p.get("teamId"),
+            "espn_id": str(pid),
+        })
+    made.sort(key=lambda x: x["overall"] or 0)
+    return {"in_progress": bool(dd.get("inProgress")),
+            "drafted": bool(dd.get("drafted")), "picks": made}
+
+
+def fetch_draft_picks(cookies: dict, league_id: int,
+                      season: int = ESPN_SEASON) -> dict:
+    """Poll the live draft board for ``league_id``. Raises on network/auth error."""
+    url = (f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/"
+           f"seasons/{season}/segments/0/leagues/{league_id}?view=mDraftDetail")
+    return parse_draft_picks(_get_json(url, cookies))
+
+
+def load_espn_maps(date: str) -> tuple[dict, dict]:
+    """(espn_id -> canonical_id, espn_id -> name) for resolving live picks.
+
+    The crosswalk (all offense) overlaid by the active snapshot's espn_adp.csv
+    (adds D/ST via team + player names). Same mapping the board uses, so a live
+    pick resolves to exactly the same player."""
+    from espn_adp import ESPN_TEAM_FIX, espn_id_to_mfl  # lazy: polars/ids only when syncing
+    import snapshots
+
+    id2c = espn_id_to_mfl()
+    id2n: dict[str, str] = {}
+    # D/ST aren't in the crosswalk; their live playerId is -16000 - proTeamId, so
+    # map all 32 deterministically to DST_<team> (same canonical the board uses).
+    for pid, abbr in ESPN_PROTEAM.items():
+        eid = str(-16000 - pid)
+        id2c[eid] = f"DST_{ESPN_TEAM_FIX.get(abbr, abbr)}"
+        id2n[eid] = f"{abbr} D/ST"
+    adp = snapshots.espn_adp_path(date)
+    if os.path.exists(adp):
+        with open(adp, newline="", encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                eid = (r.get("espn_id") or "").strip()
+                if not eid:
+                    continue
+                if (r.get("canonical_id") or "").strip():
+                    id2c[eid] = r["canonical_id"].strip()
+                if r.get("name"):
+                    id2n[eid] = r["name"]
+    return id2c, id2n
+
+
+def resolve_draft_picks(cookies: dict, league_id: int, date: str,
+                        season: int = ESPN_SEASON) -> dict:
+    """Live draft state with each made pick mapped to our canonical player id.
+
+    Returns {in_progress, drafted, picks: [{overall, round, round_pick, team_id,
+    espn_id, canonical_id, name}], unmapped: [...]}. ``unmapped`` are picks whose
+    ESPN id we couldn't resolve (rare — a deep player outside the pulled board);
+    the caller surfaces those so nothing is silently dropped."""
+    state = fetch_draft_picks(cookies, league_id, season)
+    id2c, id2n = load_espn_maps(date)
+    for p in state["picks"]:
+        p["canonical_id"] = id2c.get(p["espn_id"])
+        p["name"] = id2n.get(p["espn_id"], f"ESPN#{p['espn_id']}")
+    state["unmapped"] = [p for p in state["picks"] if not p["canonical_id"]]
+    return state
