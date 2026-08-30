@@ -60,16 +60,20 @@ def _reason(pool, pos, i, j, next_pick, vona, factor) -> str:
 
 
 def vona_recommend(pool, drafted: set, current_pick: int, next_pick: int | None,
-                   roster_positions: list[str], k: int = 3) -> list[dict]:
+                   roster_positions: list[str], k: int = 3,
+                   exclude: set = frozenset()) -> list[dict]:
     """Top-k positionally-diverse recommendations by roster-weighted VONA.
 
     Deterministic. Ranked by (VONA x roster factor), then best value available.
+    ``exclude`` (player ids) are skipped as *my* candidates — opponents still
+    take them (they still leave the board), they're just never recommended.
     """
     avail_idx = np.array([i for i, pid in enumerate(pool.ids) if pid not in drafted])
     if avail_idx.size == 0:
         return []
 
-    # opponents picking between my current pick and my next pick
+    # opponents picking between my current pick and my next pick (excluded players
+    # still count here — opponents can draft them, so they still leave the board)
     gap_opp = len(pool) if next_pick is None else max(0, next_pick - current_pick - 1)
     order = avail_idx[np.argsort(pool.espn_adp[avail_idx], kind="stable")]
     survivors = set(order[gap_opp:].tolist())  # expected to last to my next pick
@@ -78,7 +82,8 @@ def vona_recommend(pool, drafted: set, current_pick: int, next_pick: int | None,
 
     rows = []
     for pos in POSITIONS:
-        idxs = [i for i in avail_idx.tolist() if pool.positions[i] == pos]
+        idxs = [i for i in avail_idx.tolist()
+                if pool.positions[i] == pos and pool.ids[i] not in exclude]
         if not idxs:
             continue
         best_now = max(idxs, key=lambda i: pool.proj_points[i])

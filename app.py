@@ -16,6 +16,7 @@ import pandas as pd
 import streamlit as st
 
 import espn_live
+import overrides
 import refresh
 import snapshots
 from board import load_board
@@ -33,6 +34,9 @@ st.set_page_config(page_title="Who's Your Daddy? · Draft Assistant",
 
 ACTIVE = snapshots.active_snapshot()
 SP = state_path(ACTIVE)
+_OV = overrides.load()
+OV_SIG = overrides.signature()               # cache key: changes when overrides change
+EXCLUDE = frozenset(overrides.excluded_ids(_OV))
 LOGO = next((f"assets/logo.{ext}" for ext in ("png", "jpg", "jpeg", "webp")
              if os.path.exists(f"assets/logo.{ext}")), None)
 DISPLAY_COLS = ["rank", "name", "pos", "team", "bye", "tier", "proj_points",
@@ -41,13 +45,19 @@ POS_ORDER = ["QB", "RB", "WR", "TE", "K", "DST"]
 
 
 @st.cache_data
-def get_board(date):
+def get_base_board(date):
+    """The source board, no overrides — cached per snapshot (the editor's base)."""
     return load_board(date)
 
 
+@st.cache_data
+def get_board(date, ov_sig):
+    return overrides.apply(get_base_board(date), overrides.load())
+
+
 @st.cache_resource
-def get_pool(date):
-    return PlayerPool.from_board(load_board(date))
+def get_pool(date, ov_sig):
+    return PlayerPool.from_board(overrides.apply(get_base_board(date), overrides.load()))
 
 
 @st.cache_resource
@@ -61,14 +71,15 @@ def get_mfl_gsis():
 
 
 @st.cache_data(show_spinner="Simulating the rest of the draft…")
-def sim_cached(active, drafted_key, roster_key, my_slot, my_pick, n_sims, sigma, risk_pct):
-    """Cached per snapshot + draft state + settings, so it only recomputes on a
-    new pick, not on every filter/search rerun. Returns (recs, seconds_taken)."""
+def sim_cached(active, ov_sig, exclude_key, drafted_key, roster_key, my_slot, my_pick,
+               n_sims, sigma, risk_pct):
+    """Cached per snapshot + overrides + draft state + settings, so it only
+    recomputes on a new pick, not on every rerun. Returns (recs, seconds)."""
     import time
     t = time.perf_counter()
-    recs = recommend_sim(get_pool(active), set(drafted_key), my_slot, my_pick,
+    recs = recommend_sim(get_pool(active, ov_sig), set(drafted_key), my_slot, my_pick,
                          list(roster_key), n_sims=n_sims, sigma=sigma,
-                         risk_pct=risk_pct, seed=0)
+                         risk_pct=risk_pct, seed=0, exclude=set(exclude_key))
     return recs, time.perf_counter() - t
 
 
@@ -232,6 +243,72 @@ def render_espn_update(active, has_picks):
             _render_espn_report(rep)
 
 
+def _ov_changed(edited, base) -> bool:
+    a_na = edited is None or (isinstance(edited, float) and math.isnan(edited))
+    b_na = base is None or (isinstance(base, float) and math.isnan(base))
+    if a_na and b_na:
+        return False
+    if a_na or b_na:
+        return True
+    return abs(float(edited) - float(base)) > 0.05
+
+
+def render_overrides_panel(active):
+    with st.expander("✏️ Edit rankings & projections (your overrides)", expanded=False):
+        st.caption("Disagree with the board? Edit a player's **proj** (the points "
+                   "both engines optimize) or **cons.rank** (candidate order), or "
+                   "tick **exclude** to keep him out of your recommendations "
+                   "(opponents can still draft him, and he stays on the board so you "
+                   "can track the pick). Saved globally, applied over whichever "
+                   "snapshot is active.")
+        base = get_base_board(active).reset_index(drop=True)
+        ov = overrides.load()
+        cids = base["canonical_id"].tolist()
+        disp = pd.DataFrame({
+            "rank": base["rank"], "name": base["name"], "pos": base["pos"],
+            "team": base["team"],
+            "cons.rank": [ov.get(c, {}).get("consensus_rank", r)
+                          for c, r in zip(cids, base["consensus_rank"])],
+            "proj": [ov.get(c, {}).get("proj_points", p)
+                     for c, p in zip(cids, base["proj_points"])],
+            "exclude": [bool(ov.get(c, {}).get("exclude", False)) for c in cids],
+        })
+        edited = st.data_editor(
+            disp, hide_index=True, height=400, width="stretch",
+            key=f"editor_{overrides.signature()}",
+            disabled=["rank", "name", "pos", "team"],
+            column_config={
+                "proj": st.column_config.NumberColumn("proj", format="%.1f", step=1.0),
+                "cons.rank": st.column_config.NumberColumn("cons.rank", format="%.1f", step=1.0),
+                "exclude": st.column_config.CheckboxColumn("exclude"),
+            })
+        new_ov = {}
+        for i, cid in enumerate(cids):
+            if not isinstance(cid, str):
+                continue
+            o = {}
+            if _ov_changed(edited.iloc[i]["cons.rank"], base["consensus_rank"].iloc[i]):
+                o["consensus_rank"] = float(edited.iloc[i]["cons.rank"])
+            if _ov_changed(edited.iloc[i]["proj"], base["proj_points"].iloc[i]):
+                o["proj_points"] = float(edited.iloc[i]["proj"])
+            if bool(edited.iloc[i]["exclude"]):
+                o["exclude"] = True
+            if o:
+                new_ov[cid] = o
+        c1, c2 = st.columns([4, 1])
+        c1.caption(f"{len(new_ov)} player override(s) active.")
+        if c2.button("Clear all", key="clear_ov", disabled=not ov, width="stretch"):
+            overrides.save({})
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            st.rerun()
+        if new_ov != ov:
+            overrides.save(new_ov)
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            st.rerun()
+
+
 def render_update_panel(active, has_picks):
     with st.expander("⟳ Update data — upload new FantasyPros files", expanded=False):
         st.caption("Upload a fresh FantasyPros consensus-rankings export and the six "
@@ -274,7 +351,7 @@ if st.session_state.ds is None:
         st.session_state.ds = DraftState(my_slot=3, date=ACTIVE)
 
 ds: DraftState = st.session_state.ds
-board = get_board(ACTIVE)
+board = get_board(ACTIVE, OV_SIG)
 drafted = ds.drafted_ids()
 avail = board[~board["canonical_id"].isin(drafted)]
 
@@ -358,6 +435,7 @@ h[3].metric("Picks to my turn", "-" if utn is None else ("YOU'RE UP" if utn == 0
 
 render_espn_update(ACTIVE, len(ds.picks) > 0)
 render_update_panel(ACTIVE, len(ds.picks) > 0)
+render_overrides_panel(ACTIVE)
 
 # --- recommendation cards (§8, §10 top) ---
 if not ds.is_complete():
@@ -366,7 +444,7 @@ if not ds.is_complete():
         my_pick = upcoming[0]
         my_next_pick = upcoming[1] if len(upcoming) > 1 else None
         roster_pos = [p["pos"] for p in ds.my_roster()]
-        pool = get_pool(ACTIVE)
+        pool = get_pool(ACTIVE, OV_SIG)
         on_clock = ("You're on the clock." if my_pick == ds.current_pick
                     else f"Targets for your next pick (overall {my_pick}).")
 
@@ -382,7 +460,7 @@ if not ds.is_complete():
 
         if engine == "Simulation":
             recs, secs = sim_cached(
-                ACTIVE, frozenset(ds.drafted_ids()),
+                ACTIVE, OV_SIG, EXCLUDE, frozenset(ds.drafted_ids()),
                 tuple(p["player_id"] for p in ds.my_roster()),
                 ds.my_slot, my_pick, sim_nsims, sim_sigma, risk_pct)
             over = "  ·  ⚠️ over 3s — lower Simulations" if secs > 3 else ""
@@ -399,7 +477,7 @@ if not ds.is_complete():
                     why_expander(r["canonical_id"])
         else:
             recs = vona_recommend(pool, ds.drafted_ids(), my_pick, my_next_pick,
-                                  roster_pos, k=3)
+                                  roster_pos, k=3, exclude=EXCLUDE)
             st.markdown("#### Recommended picks · VONA")
             st.caption(on_clock)
             for col, r in zip(st.columns(3), recs):
@@ -417,6 +495,13 @@ with left:
         st.success("Draft complete — all 160 picks are in.")
     else:
         st.subheader(f"Pick {ds.current_pick} · round {ds.current_round}")
+
+    if EXCLUDE:
+        ex_names = board[board["canonical_id"].isin(EXCLUDE)]["name"].tolist()
+        if ex_names:
+            st.caption("🚫 Excluded from your recs: " + ", ".join(ex_names[:12])
+                       + (" …" if len(ex_names) > 12 else "")
+                       + " — opponents can still draft them (they stay on the board).")
 
     # filters (reset to the full board each pick)
     fc = st.columns([1, 2])

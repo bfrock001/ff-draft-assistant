@@ -83,3 +83,12 @@ def test_determinism_same_seed():
     # a different seed can differ, but must still be internally valid
     c = recommend_sim(pool, **{**kw, "seed": 8})
     assert len(c) == 3
+
+
+def test_manual_exclude_keeps_players_out_of_recs():
+    pool = _te_cliff_sim_pool()
+    recs = recommend_sim(pool, drafted=set(), my_slot=1, current_pick=1,
+                         my_roster_ids=[], n_sims=150, sigma=8.0, seed=0,
+                         n_teams=4, n_rounds=6, exclude={"TE_A", "TE_B"})
+    ids = {r["canonical_id"] for r in recs}
+    assert "TE_A" not in ids and "TE_B" not in ids

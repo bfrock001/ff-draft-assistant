@@ -67,10 +67,13 @@ def optimal_lineup_points(mine, perf, pos_code):
     return total + flex
 
 
-def top_k_available(pool, avail_base, k):
+def top_k_available(pool, avail_base, k, exclude_mask=None):
     """Candidate set: best available at each position (diversity — so a TE is
-    always evaluated) then filled out by consensus rank."""
+    always evaluated) then filled out by consensus rank. ``exclude_mask`` drops
+    players you never want recommended."""
     idx = np.where(avail_base)[0]
+    if exclude_mask is not None:
+        idx = idx[~exclude_mask[idx]]
     chosen = []
     for p in range(6):
         pi = idx[pool.pos_code[idx] == p]
@@ -107,7 +110,8 @@ def opponent_draft_order(pool, drafted, sigma, seed, n_picks,
 
 
 def _simulate(pool, avail_base, my_future, cand_idx, mine_row, counts_row,
-              start_pick, n_sims, sigma, rng, n_teams, n_rounds, snapshot_pick):
+              start_pick, n_sims, sigma, rng, n_teams, n_rounds, snapshot_pick,
+              excl_mask=None):
     N = len(pool)
     pc = pool.pos_code
     perf = pool.proj_points[None, :] + pool.points_sd[None, :] * rng.standard_normal((n_sims, N))
@@ -136,6 +140,8 @@ def _simulate(pool, avail_base, my_future, cand_idx, mine_row, counts_row,
         rnd = (pk - 1) // n_teams + 1
         if pk in my_future:
             elig = (~taken) & _fillable(counts)[:, pc]
+            if excl_mask is not None:
+                elig = elig & (~excl_mask[None, :])   # future-me won't take excluded
             picked = np.argmax(np.where(elig, perf, NEG), axis=1)
             mine[rows, picked] = True
             counts[rows, pc[picked]] += 1
@@ -161,10 +167,12 @@ def _reason(pool, c, score, survive, snapshot_pick):
 
 def recommend_sim(pool, drafted, my_slot, current_pick, my_roster_ids,
                   n_sims=500, sigma=8.0, risk_pct=50, k=10, seed=0,
-                  n_teams=N_TEAMS, n_rounds=N_ROUNDS):
+                  n_teams=N_TEAMS, n_rounds=N_ROUNDS, exclude=frozenset()):
     """Top-3 by the chosen percentile of final starting-lineup points (§8).
 
     Deterministic for a fixed seed (common random numbers across candidates).
+    ``exclude`` (player ids) are never recommended and never taken by future-me;
+    opponents still draft them (availability stays correct).
     """
     N = len(pool)
     avail_base = np.array([pid not in drafted for pid in pool.ids])
@@ -179,12 +187,13 @@ def recommend_sim(pool, drafted, my_slot, current_pick, my_roster_ids,
     my_future = set(my_all[1:])                 # I take the candidate at current_pick
     snapshot_pick = my_all[1] if len(my_all) > 1 else None
 
+    excl_mask = (np.array([pid in exclude for pid in pool.ids]) if exclude else None)
     scored = []
-    for c in top_k_available(pool, avail_base, k):
+    for c in top_k_available(pool, avail_base, k, excl_mask):
         rng = np.random.default_rng(seed)       # common random numbers -> deterministic + fair
         outcomes, snap = _simulate(pool, avail_base, my_future, c, mine_row,
                                    counts_row, current_pick, n_sims, sigma, rng,
-                                   n_teams, n_rounds, snapshot_pick)
+                                   n_teams, n_rounds, snapshot_pick, excl_mask)
         survive = (float(np.mean(snap[:, pool.pos_code[c]] >= pool.proj_points[c] - 15.0))
                    if snap is not None else 0.0)
         scored.append({"idx": c, "score": float(np.percentile(outcomes, risk_pct)),

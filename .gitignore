@@ -21,3 +21,7 @@ config/espn_cookies.json
 # Which dated snapshot the app currently reads — a local runtime selection,
 # not source (defaults to the most recent snapshot when absent).
 config/active_snapshot
+
+# Your personal value overrides (proj/rank edits + exclusions) — live working
+# state edited in the app, not source. (data/manual_id_overrides.csv IS tracked.)
+data/manual_overrides.csv

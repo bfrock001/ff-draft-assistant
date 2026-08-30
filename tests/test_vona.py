@@ -101,3 +101,12 @@ def test_drafted_players_are_excluded():
     # TE_B is now the best-now TE
     te = next((r for r in recs if r["pos"] == "TE"), None)
     assert te is not None and te["name"] == "TE_B"
+
+
+def test_manual_exclude_keeps_a_player_out_of_recs():
+    pool = te_cliff_pool()
+    recs = vona_recommend(pool, drafted=set(), current_pick=15, next_pick=26,
+                          roster_positions=[], k=3, exclude={"TE_A"})
+    assert all(r["canonical_id"] != "TE_A" for r in recs)
+    te = next((r for r in recs if r["pos"] == "TE"), None)
+    assert te is not None and te["name"] == "TE_B"   # best non-excluded TE leads
