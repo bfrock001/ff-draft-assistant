@@ -19,6 +19,7 @@ import espn_live
 import refresh
 import snapshots
 from board import load_board
+from strategy import suggest_risk
 from config import N_TEAMS
 from draft_state import DraftState, state_path
 from explain import explain_candidate
@@ -73,6 +74,10 @@ def sim_cached(active, drafted_key, roster_key, my_slot, my_pick, n_sims, sigma,
 
 def team_label(t: int, my_slot: int) -> str:
     return f"Team {t}" + (" (YOU)" if t == my_slot else "")
+
+
+def _apply_sugg_risk():
+    st.session_state.risk = st.session_state.get("_sugg_risk", "Balanced")
 
 
 # --- Update-data panel (spec §3.5): upload new FantasyPros files -> new snapshot ---
@@ -290,13 +295,27 @@ with st.sidebar:
         st.warning(f"Snapshot is {age} days old — consider refreshing.")
 
     st.divider()
+    st.session_state.setdefault("risk", "Balanced")
     engine = st.radio("Engine", ["VONA (instant)", "Simulation"], key="engine")
     risk_pct, sim_sigma, sim_nsims, risk = 50, 8.0, 500, "Balanced"
+    # round/roster-aware risk suggestion — see suggest_risk() for the rationale
+    _up = [p for p in ds.my_pick_numbers() if p >= ds.current_pick]
+    _my_round = ((_up[0] - 1) // N_TEAMS + 1) if _up else None
+    _starters_open = sum(1 for _, p in ds.roster_slots()[0] if p is None)
+    sugg_risk, sugg_reason = suggest_risk(_my_round, _starters_open)
+    st.session_state._sugg_risk = sugg_risk
     if engine == "Simulation":
         risk = st.select_slider("Risk dial", ["Safe", "Balanced", "Upside"],
-                                value="Balanced", key="risk")
+                                key="risk")
+        _rd = f"round {_my_round}" if _my_round else "this pick"
+        st.caption(f"💡 Suggested for {_rd}: **{sugg_risk}** — {sugg_reason}")
+        if st.session_state.risk != sugg_risk:
+            st.button(f"Use {sugg_risk}", key="apply_risk",
+                      on_click=_apply_sugg_risk, width="stretch")
         risk_pct = {"Safe": 30, "Balanced": 50, "Upside": 70}[risk]
         sim_sigma = st.slider("Opponent randomness σ", 0.0, 16.0, 8.0, 1.0, key="sigma")
+        st.caption("💡 Suggested ~8 (realistic draft chaos). Lower toward 6 if your "
+                   "league drafts chalk / has auto-drafters; raise toward 10 if wild.")
         sim_nsims = st.select_slider("Simulations", [250, 500, 1000], value=500,
                                      key="nsims")
 
@@ -351,9 +370,11 @@ if not ds.is_complete():
                 tuple(p["player_id"] for p in ds.my_roster()),
                 ds.my_slot, my_pick, sim_nsims, sim_sigma, risk_pct)
             over = "  ·  ⚠️ over 3s — lower Simulations" if secs > 3 else ""
+            nudge = (f"  ·  💡 try **{sugg_risk}** this round"
+                     if sugg_risk and risk != sugg_risk else "")
             st.markdown("#### Recommended picks · Simulation")
             st.caption(f"{on_clock}  ·  {sim_nsims} sims · σ={sim_sigma:.0f} · "
-                       f"{risk} · {secs:.2f}s{over}")
+                       f"{risk} · {secs:.2f}s{over}{nudge}")
             for col, r in zip(st.columns(3), recs):
                 with col.container(border=True):
                     st.markdown(f"**{r['name']}** · {r['pos']} {r['team']}")

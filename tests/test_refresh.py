@@ -36,18 +36,19 @@ def test_rebuild_reproduces_board(tmp_path):
     board identical to the active one, with the ID gate clean (Increment-1
     acceptance)."""
     from board import load_board
-    src = "data/raw/2026-08-28"
-    new = "2099-01-02"
+    src, new = "2026-08-28", "2099-01-02"
     dst = snapshots.snapshot_dir(new)
     if os.path.isdir(dst):
         shutil.rmtree(dst)
     os.makedirs(dst)
     try:
-        shutil.copy(f"{src}/rankings_ppr_consensus_2026-08-28.csv", f"{dst}/rankings.csv")
-        shutil.copy(f"{src}/espn_ranks_2026-08-28.csv", f"{dst}/espn_ranks.csv")
-        for fn in ("proj_qb.csv", "proj_rb.csv", "proj_wr.csv", "proj_te.csv",
-                   "proj_k.csv", "proj_dst.csv"):
-            shutil.copy(f"{src}/{fn}", f"{dst}/{fn}")
+        # copy the snapshot's AUTHORITATIVE raws (robust to an ESPN refresh that
+        # replaced the dated espn_ranks_*.csv with the standardized espn_ranks.csv)
+        shutil.copy(snapshots.rankings_path(src), f"{dst}/rankings.csv")
+        shutil.copy(snapshots.espn_raw_path(src), f"{dst}/espn_ranks.csv")
+        for pos in ("QB", "RB", "WR", "TE", "K", "DST"):
+            shutil.copy(snapshots.proj_raw_path(src, pos),
+                        snapshots.proj_raw_path(new, pos))
 
         m = refresh.rebuild(new)
         assert m["gate"]["unmatched_top_n_count"] == 0
