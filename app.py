@@ -533,6 +533,12 @@ with left:
         rows = sel.selection["rows"] if sel and sel.selection else []
         if rows:
             prow = view.iloc[rows[0]]
+            # auto-show this player's stats in the Player-detail section below —
+            # only on a NEW board selection, so the dropdown there can still override
+            picked_name = prow["name"]
+            if st.session_state.get("_last_board_sel") != picked_name:
+                st.session_state._last_board_sel = picked_name
+                st.session_state.detail_player = picked_name
             proj = prow["proj_points"]
             proj_str = ("" if not isinstance(proj, (int, float)) or math.isnan(proj)
                         else f" · proj {proj:.0f}")
