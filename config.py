@@ -28,6 +28,11 @@ POSITIONS = ("QB", "RB", "WR", "TE", "K", "DST")
 ROSTER_CAPS = {"QB": 2, "TE": 2, "K": 1, "DST": 1}
 NO_KDST_BEFORE_ROUND = 13  # no K or D/ST may be drafted before this round
 
+# ESPN league identity for the pre-draft ESPN board refresh (spec §3.2). Used
+# only by the "Update ESPN" button — never during the draft itself.
+ESPN_LEAGUE_ID = 840743625
+ESPN_SEASON = 2026
+
 
 def pick_number(slot: int, rnd: int, n_teams: int = N_TEAMS) -> int:
     """Overall pick number for a 1-indexed draft ``slot`` in round ``rnd`` (§1).

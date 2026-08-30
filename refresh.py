@@ -21,6 +21,7 @@ import os
 import shutil
 
 import espn_adp
+import espn_live
 import projections
 import snapshots
 from board import load_board
@@ -129,6 +130,37 @@ def rebuild(date: str, top_n: int = 200) -> dict:
     with open(snapshots.manifest_path(date), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
     return manifest
+
+
+def refresh_espn(date: str) -> dict:
+    """Pull a fresh ESPN board into ``date``'s snapshot, rebuild espn_adp.csv +
+    the manifest, and return a coverage report.
+
+    Non-destructive: the risky network fetch (and cookie/auth checks) happen
+    BEFORE any file is written, so on failure the existing board is untouched.
+    """
+    cookies = espn_live.load_cookies()             # raises if missing/placeholder
+    rows = espn_live.fetch_board(cookies)          # raises on network / auth error
+    if len(rows) < 50:
+        raise RuntimeError(f"ESPN returned only {len(rows)} players (expected a few "
+                           "hundred) — the board was not changed.")
+    d = snapshots.snapshot_dir(date)
+    raw = os.path.join(d, "espn_ranks.csv")
+    espn_live.write_raw(rows, raw + ".tmp")
+    os.replace(raw + ".tmp", raw)                  # atomic swap of the raw board
+    manifest = rebuild(date)                        # regenerates espn_adp + manifest
+    manifest["espn_refreshed_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+
+    # which of OUR top-200 lack an ESPN rank after the refresh?
+    missing = []
+    try:
+        top = load_board(date)
+        top = top[top["rank"] <= 200]
+        for r in top[top["espn_rank"].isna()].itertuples(index=False):
+            missing.append({"rank": int(r.rank), "name": r.name, "pos": r.pos})
+    except Exception:  # noqa: BLE001
+        pass
+    return {"rows": rows, "manifest": manifest, "missing": missing}
 
 
 def _indexed(date: str):

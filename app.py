@@ -15,6 +15,7 @@ import os
 import pandas as pd
 import streamlit as st
 
+import espn_live
 import refresh
 import snapshots
 from board import load_board
@@ -158,6 +159,58 @@ def _render_report(rep, has_picks):
             st.rerun()
 
 
+def _render_espn_report(rep):
+    if "error" in rep:
+        st.error("ESPN update failed — the previous board is unchanged.\n\n"
+                 + rep["error"])
+        return
+    res = rep["res"]
+    rows, m = res["rows"], res["manifest"]
+    cov = m.get("coverage", {})
+    when = m.get("espn_refreshed_at", "")
+    st.success(f"ESPN board updated — {len(rows)} players pulled"
+               + (f" · {when}" if when else ""))
+    if "error" not in cov:
+        st.caption(f"Coverage: {cov['espn_have']}/{cov['total']} of your top "
+                   f"{cov['top_n']} have an ESPN rank.")
+    st.caption("Top of ESPN board: " + " · ".join(
+        f"{r['name']} ({r['pos']}" + (f", ADP {r['adp']}" if r['adp'] != "" else "")
+        + ")" for r in rows[:5]))
+    miss = res.get("missing") or []
+    if miss:
+        st.caption(f"{len(miss)} of your top-200 aren't on ESPN's board: "
+                   + ", ".join(x["name"] for x in miss[:10])
+                   + (" …" if len(miss) > 10 else ""))
+
+
+def render_espn_update(active):
+    with st.expander("⟳ Update ESPN board (opponent model)", expanded=False):
+        st.caption("One-click pull of the latest ESPN PPR draft ranks + ADP into "
+                   f"the active snapshot ({active}). Pre-draft only — the draft "
+                   "itself never touches the network.")
+        if espn_live.cookies_configured():
+            if st.button("Update ESPN now", type="primary", key="espn_update"):
+                try:
+                    with st.spinner("Fetching the latest ESPN board…"):
+                        res = refresh.refresh_espn(active)
+                except Exception as e:  # noqa: BLE001 — surfaced to the user
+                    st.session_state.espn_report = {"error": str(e)}
+                else:
+                    st.session_state.espn_report = {"res": res}
+                    st.cache_data.clear()
+                    st.cache_resource.clear()
+                    st.rerun()
+        else:
+            st.warning("ESPN cookies aren't set up. Copy "
+                       "`config/espn_cookies.example.json` to "
+                       "`config/espn_cookies.json` and paste your `espn_s2` + `SWID` "
+                       "(DevTools → Application → Cookies → fantasy.espn.com).")
+        rep = st.session_state.get("espn_report")
+        if rep:
+            st.divider()
+            _render_espn_report(rep)
+
+
 def render_update_panel(active, has_picks):
     with st.expander("⟳ Update data — upload new FantasyPros files", expanded=False):
         st.caption("Upload a fresh FantasyPros consensus-rankings export and the six "
@@ -268,6 +321,7 @@ h[2].metric("On the clock", "-" if oc is None else ("YOU" if mine_now else f"Tea
 utn = ds.picks_until_my_turn()
 h[3].metric("Picks to my turn", "-" if utn is None else ("YOU'RE UP" if utn == 0 else utn))
 
+render_espn_update(ACTIVE)
 render_update_panel(ACTIVE, len(ds.picks) > 0)
 
 # --- recommendation cards (§8, §10 top) ---
