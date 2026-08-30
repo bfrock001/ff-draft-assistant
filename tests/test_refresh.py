@@ -25,6 +25,33 @@ def test_diff_detects_movers_entrants_dropped(monkeypatch):
     assert d["dropped"] == ["Bo"]                          # fell out of top 3
 
 
+def test_carry_fantasypros_forward_copies_only_missing():
+    src, dst = "2099-03-03", "2099-03-04"
+    sd, dd = snapshots.snapshot_dir(src), snapshots.snapshot_dir(dst)
+    for p in (sd, dd):
+        if os.path.isdir(p):
+            shutil.rmtree(p)
+    os.makedirs(sd)
+    with open(os.path.join(sd, "rankings.csv"), "w") as f:
+        f.write("orig\n")
+    for fn in snapshots.PROJ_RAW.values():
+        with open(os.path.join(sd, fn), "w") as f:
+            f.write("orig\n")
+    try:
+        # dst already has its own rankings -> must NOT be overwritten
+        os.makedirs(dd)
+        with open(os.path.join(dd, "rankings.csv"), "w") as f:
+            f.write("keep\n")
+        refresh.carry_fantasypros_forward(src, dst)
+        with open(os.path.join(dd, "rankings.csv")) as f:
+            assert f.read() == "keep\n"                 # not clobbered
+        for pos in ("QB", "RB", "WR", "TE", "K", "DST"):
+            assert os.path.exists(snapshots.proj_raw_path(dst, pos))  # carried
+    finally:
+        shutil.rmtree(sd, ignore_errors=True)
+        shutil.rmtree(dd, ignore_errors=True)
+
+
 CROSSWALK = "data/cache/ff_playerids.parquet"
 RANKINGS = "data/raw/2026-08-28/rankings_ppr_consensus_2026-08-28.csv"
 

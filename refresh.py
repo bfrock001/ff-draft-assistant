@@ -132,26 +132,39 @@ def rebuild(date: str, top_n: int = 200) -> dict:
     return manifest
 
 
-def refresh_espn(date: str) -> dict:
-    """Pull a fresh ESPN board into ``date``'s snapshot, rebuild espn_adp.csv +
-    the manifest, and return a coverage report.
+def carry_fantasypros_forward(src_date: str, dst_date: str) -> None:
+    """Copy the FantasyPros raws (rankings + 6 per-position projections) from one
+    snapshot into another (standardized names), only where the target lacks them."""
+    dst = snapshots.snapshot_dir(dst_date)
+    os.makedirs(dst, exist_ok=True)
+    rk = snapshots.rankings_path(src_date)
+    if rk and snapshots.rankings_path(dst_date) is None:
+        shutil.copy(rk, os.path.join(dst, "rankings.csv"))
+    for pos in snapshots.PROJ_RAW:
+        src_p, dst_p = snapshots.proj_raw_path(src_date, pos), snapshots.proj_raw_path(dst_date, pos)
+        if os.path.exists(src_p) and not os.path.exists(dst_p):
+            shutil.copy(src_p, dst_p)
 
-    Non-destructive: the risky network fetch (and cookie/auth checks) happen
-    BEFORE any file is written, so on failure the existing board is untouched.
-    """
+
+def _fetch_espn_rows() -> list:
+    """Cookie check + network fetch (no filesystem writes). Raises on any error."""
     cookies = espn_live.load_cookies()             # raises if missing/placeholder
     rows = espn_live.fetch_board(cookies)          # raises on network / auth error
     if len(rows) < 50:
         raise RuntimeError(f"ESPN returned only {len(rows)} players (expected a few "
-                           "hundred) — the board was not changed.")
+                           "hundred) — nothing was changed.")
+    return rows
+
+
+def _apply_espn(date: str, rows: list) -> dict:
+    """Write fresh ESPN rows into ``date``'s snapshot and rebuild + report."""
     d = snapshots.snapshot_dir(date)
+    os.makedirs(d, exist_ok=True)
     raw = os.path.join(d, "espn_ranks.csv")
     espn_live.write_raw(rows, raw + ".tmp")
     os.replace(raw + ".tmp", raw)                  # atomic swap of the raw board
     manifest = rebuild(date)                        # regenerates espn_adp + manifest
     manifest["espn_refreshed_at"] = datetime.datetime.now().isoformat(timespec="seconds")
-
-    # which of OUR top-200 lack an ESPN rank after the refresh?
     missing = []
     try:
         top = load_board(date)
@@ -161,6 +174,32 @@ def refresh_espn(date: str) -> dict:
     except Exception:  # noqa: BLE001
         pass
     return {"rows": rows, "manifest": manifest, "missing": missing}
+
+
+def refresh_espn(date: str) -> dict:
+    """Refresh ESPN into an existing snapshot, in place. Non-destructive: the
+    network fetch happens BEFORE any write, so on failure the board is untouched."""
+    return _apply_espn(date, _fetch_espn_rows())
+
+
+def refresh_espn_smart(active: str, today: str | None = None) -> dict:
+    """ESPN refresh that never mutates an older dated snapshot.
+
+    If ``active`` already is today's snapshot, refresh it in place. Otherwise
+    create today's snapshot (carry the active FantasyPros raws forward + pull
+    fresh ESPN), rebuild, and make it active — so dated snapshots stay pristine.
+    Adds ``target`` (snapshot written) and ``created_new`` to the report.
+    """
+    today = today or datetime.date.today().isoformat()
+    created_new = today != active
+    rows = _fetch_espn_rows()                       # network + cookies first, no writes
+    if created_new:
+        carry_fantasypros_forward(active, today)    # only after a good fetch
+    rep = _apply_espn(today, rows)
+    if created_new:
+        snapshots.set_active_snapshot(today)
+    rep["target"], rep["created_new"] = today, created_new
+    return rep
 
 
 def _indexed(date: str):

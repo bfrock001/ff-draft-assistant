@@ -173,8 +173,12 @@ def _render_espn_report(rep):
     rows, m = res["rows"], res["manifest"]
     cov = m.get("coverage", {})
     when = m.get("espn_refreshed_at", "")
-    st.success(f"ESPN board updated — {len(rows)} players pulled"
-               + (f" · {when}" if when else ""))
+    if res.get("created_new"):
+        head = (f"Created snapshot `{res['target']}` (FantasyPros carried forward) "
+                f"with fresh ESPN — {len(rows)} players")
+    else:
+        head = f"ESPN board updated — {len(rows)} players pulled"
+    st.success(head + (f" · {when}" if when else ""))
     if "error" not in cov:
         st.caption(f"Coverage: {cov['espn_have']}/{cov['total']} of your top "
                    f"{cov['top_n']} have an ESPN rank.")
@@ -188,28 +192,40 @@ def _render_espn_report(rep):
                    + (" …" if len(miss) > 10 else ""))
 
 
-def render_espn_update(active):
+def render_espn_update(active, has_picks):
+    today = datetime.date.today().isoformat()
     with st.expander("⟳ Update ESPN board (opponent model)", expanded=False):
-        st.caption("One-click pull of the latest ESPN PPR draft ranks + ADP into "
-                   f"the active snapshot ({active}). Pre-draft only — the draft "
-                   "itself never touches the network.")
-        if espn_live.cookies_configured():
-            if st.button("Update ESPN now", type="primary", key="espn_update"):
-                try:
-                    with st.spinner("Fetching the latest ESPN board…"):
-                        res = refresh.refresh_espn(active)
-                except Exception as e:  # noqa: BLE001 — surfaced to the user
-                    st.session_state.espn_report = {"error": str(e)}
-                else:
-                    st.session_state.espn_report = {"res": res}
-                    st.cache_data.clear()
-                    st.cache_resource.clear()
-                    st.rerun()
+        if today == active:
+            st.caption(f"Pulls the latest ESPN PPR draft ranks + ADP into today's "
+                       f"snapshot ({active}). Pre-draft only — the draft never "
+                       "touches the network.")
         else:
+            st.caption(f"Pulls the latest ESPN board into a NEW snapshot dated "
+                       f"{today} (your current FantasyPros data carried forward), "
+                       f"keeping {active} pristine. Pre-draft only.")
+        if not espn_live.cookies_configured():
             st.warning("ESPN cookies aren't set up. Copy "
                        "`config/espn_cookies.example.json` to "
                        "`config/espn_cookies.json` and paste your `espn_s2` + `SWID` "
                        "(DevTools → Application → Cookies → fantasy.espn.com).")
+        elif today != active and has_picks:
+            st.info("This would create a new dated snapshot (changing the active "
+                    "dataset) — finish or reset the current draft first.")
+        elif st.button("Update ESPN now", type="primary", key="espn_update"):
+            try:
+                with st.spinner("Fetching the latest ESPN board…"):
+                    res = refresh.refresh_espn_smart(active)
+            except Exception as e:  # noqa: BLE001 — surfaced to the user
+                st.session_state.espn_report = {"error": str(e)}
+            else:
+                st.session_state.espn_report = {"res": res}
+                if res.get("created_new"):
+                    st.session_state.ds = DraftState(
+                        my_slot=st.session_state.ds.my_slot, date=res["target"])
+                    st.session_state.ds.save(state_path(res["target"]))
+                st.cache_data.clear()
+                st.cache_resource.clear()
+                st.rerun()
         rep = st.session_state.get("espn_report")
         if rep:
             st.divider()
@@ -340,7 +356,7 @@ h[2].metric("On the clock", "-" if oc is None else ("YOU" if mine_now else f"Tea
 utn = ds.picks_until_my_turn()
 h[3].metric("Picks to my turn", "-" if utn is None else ("YOU'RE UP" if utn == 0 else utn))
 
-render_espn_update(ACTIVE)
+render_espn_update(ACTIVE, len(ds.picks) > 0)
 render_update_panel(ACTIVE, len(ds.picks) > 0)
 
 # --- recommendation cards (§8, §10 top) ---
