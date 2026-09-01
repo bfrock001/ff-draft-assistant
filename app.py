@@ -458,7 +458,10 @@ if not ds.is_complete():
                 for line in exp["lines"]:
                     st.markdown(f"- {line}")
 
-        if engine == "Simulation":
+        # The simulation only runs when you're actually on the clock — so clicking
+        # off a fast run of opponent picks stays instant. Off-turn (or on VONA) it
+        # shows the instant VONA read instead.
+        if engine == "Simulation" and mine_now:
             recs, secs = sim_cached(
                 ACTIVE, OV_SIG, EXCLUDE, frozenset(ds.drafted_ids()),
                 tuple(p["player_id"] for p in ds.my_roster()),
@@ -467,7 +470,7 @@ if not ds.is_complete():
             nudge = (f"  ·  💡 try **{sugg_risk}** this round"
                      if sugg_risk and risk != sugg_risk else "")
             st.markdown("#### Recommended picks · Simulation")
-            st.caption(f"{on_clock}  ·  {sim_nsims} sims · σ={sim_sigma:.0f} · "
+            st.caption(f"You're on the clock.  ·  {sim_nsims} sims · σ={sim_sigma:.0f} · "
                        f"{risk} · {secs:.2f}s{over}{nudge}")
             for col, r in zip(st.columns(3), recs):
                 with col.container(border=True):
@@ -478,15 +481,19 @@ if not ds.is_complete():
         else:
             recs = vona_recommend(pool, ds.drafted_ids(), my_pick, my_next_pick,
                                   roster_pos, k=3, exclude=EXCLUDE)
-            st.markdown("#### Recommended picks · VONA")
-            st.caption(on_clock)
+            preview = engine == "Simulation"   # sim selected but not my turn
+            st.markdown("#### " + ("Your next pick · VONA preview" if preview
+                                   else "Recommended picks · VONA"))
+            st.caption(f"Overall {my_pick} — the full simulation runs when you're on "
+                       "the clock; instant VONA read for now." if preview else on_clock)
             for col, r in zip(st.columns(3), recs):
                 with col.container(border=True):
                     st.markdown(f"**{r['name']}** · {r['pos']} {r['team']}")
                     st.metric("Proj points", f"{r['proj_points']:.0f}",
                               delta=f"VONA {r['adj_vona']:.0f}")
                     st.caption(r["reasoning"])
-                    why_expander(r["canonical_id"])
+                    if not preview:
+                        why_expander(r["canonical_id"])
 
 left, right = st.columns([3, 1])
 
@@ -523,40 +530,49 @@ with left:
     if ds.is_complete():
         st.dataframe(table, hide_index=True, width="stretch", height=460)
     else:
-        st.caption("Click a player's row, set the team, then Draft.")
+        st.caption("Check one or more players, then **Draft** — tick several to mark "
+                   "a fast run at once (they're drafted top-down in board order).")
         # key changes per pick and per filter so the selection never points at
         # a stale row after a pick or a filter change.
+        board_key = f"board_{ds.current_pick}_{pos_filter}_{search}"
+
+        def draft_bar(selected, bar_key, empty_hint=False):
+            n = len(selected)
+            if n == 0:
+                if empty_hint:
+                    st.caption("☑️ No players checked — tick a box in the board below.")
+                return
+            span = (f"pick {ds.current_pick}" if n == 1
+                    else f"picks {ds.current_pick}–{ds.current_pick + n - 1}")
+            st.caption(f"**{n} selected** → {span}: "
+                       + ", ".join(p["name"] for p in selected))
+            label = selected[0]["name"] if n == 1 else f"these {n}"
+            if st.button(f"Draft {label}", type="primary", key=bar_key, width="stretch"):
+                for p in selected:
+                    cid = p["canonical_id"]
+                    if not isinstance(cid, str):
+                        cid = f"NM_{p['name']}"
+                    ds.make_pick(cid, p["name"], p["pos"])   # team auto = pick order
+                ds.save(SP)
+                st.rerun()
+
+        top_bar = st.container()          # rendered ABOVE the board
         sel = st.dataframe(
             table, hide_index=True, width="stretch", height=420,
-            on_select="rerun", selection_mode="single-row",
-            key=f"board_{ds.current_pick}_{pos_filter}_{search}")
-        rows = sel.selection["rows"] if sel and sel.selection else []
-        if rows:
-            prow = view.iloc[rows[0]]
-            # auto-show this player's stats in the Player-detail section below —
-            # only on a NEW board selection, so the dropdown there can still override
-            picked_name = prow["name"]
+            on_select="rerun", selection_mode="multi-row", key=board_key)
+        selrows = sel.selection["rows"] if sel and sel.selection else []
+        selected = [view.iloc[i] for i in selrows]
+
+        # a single selection also drives the Player-detail stats below
+        if len(selrows) == 1:
+            picked_name = view.iloc[selrows[0]]["name"]
             if st.session_state.get("_last_board_sel") != picked_name:
                 st.session_state._last_board_sel = picked_name
                 st.session_state.detail_player = picked_name
-            proj = prow["proj_points"]
-            proj_str = ("" if not isinstance(proj, (int, float)) or math.isnan(proj)
-                        else f" · proj {proj:.0f}")
-            cta = st.columns([3, 1, 1])
-            cta[0].markdown(f"**{prow['name']}** — {prow['pos']} {prow['team']} "
-                            f"· #{int(prow['rank'])}{proj_str}")
-            team = cta[1].selectbox(
-                "Drafted by", range(1, N_TEAMS + 1), index=(oc - 1),
-                format_func=lambda t: team_label(t, ds.my_slot),
-                key=f"team_{ds.current_pick}")
-            cta[2].write("")
-            if cta[2].button("Draft", type="primary", width="stretch"):
-                cid = prow["canonical_id"]
-                if not isinstance(cid, str):
-                    cid = f"NM_{prow['name']}"
-                ds.make_pick(cid, prow["name"], prow["pos"], team=team)
-                ds.save(SP)
-                st.rerun()
+
+        with top_bar:
+            draft_bar(selected, "draft_top", empty_hint=True)
+        draft_bar(selected, "draft_bottom")
 
 with right:
     st.markdown("#### My roster")
