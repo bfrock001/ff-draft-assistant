@@ -48,3 +48,17 @@ def test_signature_changes_with_content(tmp_path):
     s1 = overrides.signature(p)
     overrides.save({"A": {"exclude": True}, "B": {"proj_points": 5.0}}, p)
     assert overrides.signature(p) != s1 and s1 != "none"
+
+
+def test_notes_roundtrip_and_comma_safe(tmp_path):
+    p = str(tmp_path / "notes.csv")
+    assert overrides.load_notes(p) == {}
+    n = {"A": "target round 3", "B": "sleeper, high ceiling", "C": "avoid — injury"}
+    overrides.save_notes(n, p)
+    assert overrides.load_notes(p) == n          # commas/dashes survive CSV quoting
+
+
+def test_save_notes_drops_blanks(tmp_path):
+    p = str(tmp_path / "notes.csv")
+    overrides.save_notes({"A": "keep", "B": "", "C": "   "}, p)
+    assert overrides.load_notes(p) == {"A": "keep"}

@@ -25,3 +25,6 @@ config/active_snapshot
 # Your personal value overrides (proj/rank edits + exclusions) — live working
 # state edited in the app, not source. (data/manual_id_overrides.csv IS tracked.)
 data/manual_overrides.csv
+
+# Your personal per-player cheat-sheet notes — live working state, not source.
+data/manual_notes.csv
