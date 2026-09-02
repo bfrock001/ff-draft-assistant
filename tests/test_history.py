@@ -1,6 +1,6 @@
 import polars as pl
 
-from history import _SRC_COLS, _ppr_expr, season_summary
+from history import _SRC_COLS, _ppr_expr, season_summary, season_totals
 
 
 def _weekly(rows):
@@ -45,3 +45,16 @@ def test_season_summary_totals_and_consistency():
     assert s["boom_pct"] == 33   # 1 of 3 >= 20
     assert s["bust_pct"] == 33   # 1 of 3 <= 5
     assert s["missed"] == 14     # 17 - 3
+
+
+def test_season_totals_sums_by_player_and_season():
+    df = _weekly([
+        {"player_id": "p", "season": 2024, "week": 1, "position": "RB", "rushing_yards": 100},  # 10
+        {"player_id": "p", "season": 2024, "week": 2, "position": "RB", "rushing_yards": 200},  # 20
+        {"player_id": "p", "season": 2023, "week": 1, "position": "RB", "rushing_yards": 50},   # 5
+        {"player_id": "q", "season": 2024, "week": 1, "position": "WR",
+         "receptions": 5, "receiving_yards": 50},                                               # 10
+    ])
+    t = season_totals(df)
+    assert t["p"][2024] == 30.0 and t["p"][2023] == 5.0
+    assert t["q"][2024] == 10.0 and 2023 not in t["q"]

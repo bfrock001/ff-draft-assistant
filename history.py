@@ -106,6 +106,19 @@ def season_summary(weekly: pl.DataFrame, gsis_id: str) -> list[dict]:
     return rows
 
 
+def season_totals(weekly: pl.DataFrame) -> dict[str, dict[int, float]]:
+    """{gsis player_id: {season: total PPR}} — one pass over the weekly data, so
+    the cheat sheet can show prior-season points for the whole board at once."""
+    g = (weekly.group_by(["player_id", "season"])
+               .agg(pl.col("ppr").sum().alias("total")))
+    out: dict[str, dict[int, float]] = {}
+    for pid, season, total in g.select(["player_id", "season", "total"]).iter_rows():
+        if pid is None:
+            continue
+        out.setdefault(str(pid), {})[int(season)] = round(float(total), 1)
+    return out
+
+
 def game_log(weekly: pl.DataFrame, gsis_id: str, season: int) -> pl.DataFrame:
     return (weekly.filter((pl.col("player_id") == gsis_id) & (pl.col("season") == season))
                   .select(["week", "opponent_team", "ppr"]).sort("week"))

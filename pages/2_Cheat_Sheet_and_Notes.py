@@ -22,11 +22,22 @@ def _cheat_board(date, ov_sig):
     return overrides.apply(load_board(date), overrides.load())
 
 
+@st.cache_data(show_spinner="Loading player history…")
+def _history():
+    """(gsis -> {season: total PPR}, mfl -> gsis) for the prior-season columns."""
+    from history import load_weekly, mfl_to_gsis, season_totals
+    return season_totals(load_weekly()), mfl_to_gsis()
+
+
 active = snapshots.active_snapshot()
 board = _cheat_board(active, overrides.signature()).reset_index(drop=True)
 ds = st.session_state.get("ds")
 drafted = ds.drafted_ids() if ds is not None else set()
 notes = overrides.load_notes()
+try:
+    totals, m2g = _history()
+except Exception:   # weekly cache unavailable (e.g. offline first run) — degrade
+    totals, m2g = {}, {}
 
 st.title("📋 Cheat Sheet & Notes")
 st.caption(
@@ -37,10 +48,12 @@ st.caption(
        if ds is not None and len(ds.picks) else
        "Start a draft on the main page and drafted players will be flagged here."))
 
-fc = st.columns([1, 2, 1])
-pos_f = fc[0].selectbox("Position", ["All", "QB", "RB", "WR", "TE", "FLEX", "K", "DST"])
-search = fc[1].text_input("Search", placeholder="player name…")
-hide_drafted = fc[2].checkbox("Hide drafted", value=False)
+pos_f = st.segmented_control(
+    "Position", ["All", "QB", "RB", "WR", "TE", "FLEX", "K", "DST"],
+    default="All") or "All"
+fc = st.columns([3, 1])
+search = fc[0].text_input("Search", placeholder="player name…")
+hide_drafted = fc[1].checkbox("Hide drafted", value=False)
 
 view = board.copy()
 if pos_f == "FLEX":
@@ -55,23 +68,39 @@ if hide_drafted:
 view = view.sort_values("rank").reset_index(drop=True)
 
 cids = view["canonical_id"].tolist()
+
+
+def _yr(cid, season):
+    g = m2g.get(str(cid)) if isinstance(cid, str) else None
+    return totals.get(g, {}).get(season) if g else None
+
+
 disp = pd.DataFrame({
-    "rank": view["rank"],
-    "tier": view["tier"] if "tier" in view else "",
-    "name": view["name"],
-    "pos": view["pos"],
-    "team": view["team"],
-    "proj": view["proj_points"],
-    "drafted": view["drafted"],
+    "rank": view["rank"].values,
+    "tier": (view["tier"] if "tier" in view else pd.Series([""] * len(view))).values,
+    "name": view["name"].values,
+    "pos": view["pos"].values,
+    "team": view["team"].values,
+    "2023": [_yr(c, 2023) for c in cids],
+    "2024": [_yr(c, 2024) for c in cids],
+    "2025": [_yr(c, 2025) for c in cids],
+    "proj": view["proj_points"].values,
+    "drafted": view["drafted"].values,
     "note": [notes.get(c if isinstance(c, str) else "", "") for c in cids],
 })
 
 edited = st.data_editor(
     disp, hide_index=True, width="stretch", height=600,
     key=f"cheat_{overrides.notes_signature()}_{pos_f}_{search}_{hide_drafted}",
-    disabled=["rank", "tier", "name", "pos", "team", "proj", "drafted"],
+    disabled=["rank", "tier", "name", "pos", "team", "2023", "2024", "2025",
+              "proj", "drafted"],
     column_config={
-        "proj": st.column_config.NumberColumn("proj", format="%.0f"),
+        "2023": st.column_config.NumberColumn("2023", format="%.0f",
+                                              help="Actual PPR points that season"),
+        "2024": st.column_config.NumberColumn("2024", format="%.0f"),
+        "2025": st.column_config.NumberColumn("2025", format="%.0f"),
+        "proj": st.column_config.NumberColumn("'26 proj", format="%.0f",
+                                              help="This season's projected PPR points"),
         "drafted": st.column_config.CheckboxColumn("drafted"),
         "note": st.column_config.TextColumn(
             "your note", width="large",
