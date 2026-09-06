@@ -66,23 +66,60 @@ def load_crosswalk(path: str = CACHE_CROSSWALK) -> list[dict]:
     return players
 
 
+def read_rankings(path: str):
+    """Read a FantasyPros rankings CSV into the internal schema, accepting EITHER
+    layout FantasyPros exports:
+
+    - the underscore export (``rank_ecr, player, pos, team, bye, rank_avg,
+      rank_best, rank_worst, rank_std, adp, tier, pos_rank``), or
+    - the standard "Draft ALL Rankings" cheat-sheet download (``RK, TIERS,
+      PLAYER NAME, TEAM, POS, BEST, WORST, AVG., STD.DEV, ECR VS. ADP``) — which
+      bakes the position rank into POS (``WR1``) and has blank tier-separator rows.
+
+    Returns a pandas DataFrame using the internal column names. This is the
+    FantasyPros *adapter* for rankings — a new source would add its own mapping.
+    """
+    import pandas as pd
+
+    df = pd.read_csv(path)
+    df.columns = [str(c).strip() for c in df.columns]
+    if "rank_ecr" not in df.columns:                       # cheat-sheet download
+        if "RK" not in df.columns and "PLAYER NAME" not in df.columns:
+            raise ValueError(
+                "Unrecognized rankings CSV — expected FantasyPros columns "
+                "(rank_ecr/player… or RK/PLAYER NAME/POS…).")
+        df = df.rename(columns={
+            "RK": "rank_ecr", "PLAYER NAME": "player", "TEAM": "team",
+            "POS": "pos_rank", "BEST": "rank_best", "WORST": "rank_worst",
+            "AVG.": "rank_avg", "STD.DEV": "rank_std", "TIERS": "tier",
+        })
+        df = df[df["player"].notna() & (df["player"].astype(str).str.strip() != "")]
+        # split "WR1" -> pos "WR" (pos_rank keeps "WR1", matching the other export)
+        df["pos"] = df["pos_rank"].astype(str).str.extract(r"([A-Za-z/]+)")[0].str.upper()
+    for col in ("bye", "adp", "pos_rank", "tier"):          # optional downstream cols
+        if col not in df.columns:
+            df[col] = pd.NA
+    for col in ("rank_ecr", "rank_avg", "rank_std", "rank_best", "rank_worst"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df[df["rank_ecr"].notna()].reset_index(drop=True)
+    df["rank_ecr"] = df["rank_ecr"].astype(int)
+    return df
+
+
 def load_rankings(path: str | None = None) -> list[dict]:
     """Load a consensus rankings snapshot, sorted by consensus rank (rank_ecr).
 
-    Defaults to the active snapshot's rankings file.
+    Defaults to the active snapshot's rankings file. Accepts either export layout
+    (see ``read_rankings``).
     """
     if path is None:
         import snapshots
         path = snapshots.rankings_path(snapshots.active_snapshot())
-    rows = []
-    with open(path, newline="", encoding="utf-8") as f:
-        for r in csv.DictReader(f):
-            rows.append({
-                "rank": int(r["rank_ecr"]),
-                "name": r["player"],
-                "pos": r["pos"].upper(),
-                "team": r["team"],
-            })
+    df = read_rankings(path)
+    rows = [{"rank": int(r.rank_ecr), "name": r.player,
+             "pos": str(r.pos).upper(), "team": r.team}
+            for r in df.itertuples(index=False)]
     rows.sort(key=lambda x: x["rank"])
     return rows
 

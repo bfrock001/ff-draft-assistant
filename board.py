@@ -10,7 +10,7 @@ import pandas as pd
 
 import snapshots
 from ids import PlayerResolver, load_overrides
-from loaders import OVERRIDES_PATH, POS_TO_CROSSWALK, load_crosswalk
+from loaders import OVERRIDES_PATH, POS_TO_CROSSWALK, load_crosswalk, read_rankings
 
 
 def _resolve_ids(df: pd.DataFrame, resolver: PlayerResolver) -> list:
@@ -29,7 +29,7 @@ def load_board(snap_date: str | None = None) -> pd.DataFrame:
     date = snap_date or snapshots.active_snapshot()
     resolver = PlayerResolver(load_crosswalk(),
                               overrides=load_overrides(OVERRIDES_PATH))
-    rk = pd.read_csv(snapshots.rankings_path(date))
+    rk = read_rankings(snapshots.rankings_path(date))
     rk["canonical_id"] = _resolve_ids(rk, resolver)
     rk = rk.rename(columns={
         "rank_ecr": "rank", "player": "name", "rank_avg": "consensus_rank",
