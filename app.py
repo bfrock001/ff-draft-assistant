@@ -98,21 +98,23 @@ def _do_build(active, new_date, rankings_up, proj_files):
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", new_date or ""):
         st.error("Snapshot date must be YYYY-MM-DD.")
         return
-    if rankings_up is None:
-        st.error("Upload the consensus rankings CSV.")
-        return
-    missing = [p for p in POS_ORDER if proj_files.get(p) is None]
-    if missing:
-        st.error("Missing projection files for: " + ", ".join(missing))
+    provided_proj = [p for p in POS_ORDER if proj_files.get(p) is not None]
+    if rankings_up is None and not provided_proj:
+        st.error("Upload at least the consensus rankings or one projection file — "
+                 "anything you skip is carried forward from the current snapshot.")
         return
     d = snapshots.snapshot_dir(new_date)
     os.makedirs(d, exist_ok=True)
-    with open(os.path.join(d, "rankings.csv"), "wb") as f:
-        f.write(rankings_up.getvalue())
-    for pos in POS_ORDER:
+    if rankings_up is not None:
+        with open(os.path.join(d, "rankings.csv"), "wb") as f:
+            f.write(rankings_up.getvalue())
+    for pos in provided_proj:
         with open(os.path.join(d, snapshots.PROJ_RAW[pos]), "wb") as f:
             f.write(proj_files[pos].getvalue())
-    carried = refresh.carry_espn_forward(active, new_date)
+    # carry forward anything NOT uploaded (rankings / projections) + the ESPN board
+    if new_date != active:
+        refresh.carry_fantasypros_forward(active, new_date)
+    carried_espn = refresh.carry_espn_forward(active, new_date)
     try:
         manifest = refresh.rebuild(new_date)
     except Exception as e:  # noqa: BLE001 — surfaced to the user, not fatal
@@ -126,8 +128,10 @@ def _do_build(active, new_date, rankings_up, proj_files):
             diff = None
     st.cache_data.clear()
     st.cache_resource.clear()
+    fresh = (["rankings"] if rankings_up is not None else []) + provided_proj
     st.session_state.build_report = {"date": new_date, "manifest": manifest,
-                                     "diff": diff, "carried_espn": carried}
+                                     "diff": diff, "carried_espn": carried_espn,
+                                     "fresh": fresh, "src": active}
 
 
 def _render_report(rep, has_picks):
@@ -144,8 +148,13 @@ def _render_report(rep, has_picks):
             st.caption("• " + u)
     if "error" not in cov:
         st.caption(f"Coverage: projections {cov['proj_have']}/{cov['total']} · "
-                   f"ESPN {cov['espn_have']}/{cov['total']} of top {cov['top_n']}"
-                   + ("  ·  ESPN carried forward" if rep["carried_espn"] else ""))
+                   f"ESPN {cov['espn_have']}/{cov['total']} of top {cov['top_n']}")
+    fresh = rep.get("fresh") or []
+    carried = [x for x in (["rankings"] + list(POS_ORDER)) if x not in fresh]
+    if rep.get("carried_espn"):
+        carried.append("ESPN")
+    st.caption("🆕 fresh this build: " + (", ".join(fresh) or "none")
+               + ("  ·  ♻️ carried forward: " + ", ".join(carried) if carried else ""))
     d = rep["diff"]
     if d:
         st.markdown(f"**Changes vs `{d['old_date']}`:**")
@@ -311,13 +320,14 @@ def render_overrides_panel(active):
 
 def render_update_panel(active, has_picks):
     with st.expander("⟳ Update data — upload new FantasyPros files", expanded=False):
-        st.caption("Upload a fresh FantasyPros consensus-rankings export and the six "
-                   "per-position projection exports, then Build. The ESPN board is "
-                   "carried forward from the current snapshot (a dedicated ESPN "
-                   "refresh button comes next). Nothing changes until you Activate.")
-        rankings_up = st.file_uploader("Consensus rankings (1 CSV)", type="csv",
-                                       key="up_rankings")
-        st.markdown("**Projection exports (FantasyPros, per position)**")
+        st.caption("Upload only what changed — the rankings, some or all projections, "
+                   f"or everything. **Anything you skip is carried forward from the "
+                   f"current snapshot ({active}).** So a routine news update can be "
+                   "just the rankings file. Nothing changes until you Activate.")
+        rankings_up = st.file_uploader("Consensus rankings — 1 CSV (optional)",
+                                       type="csv", key="up_rankings")
+        st.markdown("**Projection exports (per position — upload only the ones you're "
+                    "updating; the rest carry forward)**")
         pcols = st.columns(3)
         proj_files = {pos: pcols[i % 3].file_uploader(pos, type="csv",
                       key=f"up_proj_{pos}") for i, pos in enumerate(POS_ORDER)}
