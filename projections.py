@@ -32,20 +32,6 @@ FILES = {"QB": "proj_qb.csv", "RB": "proj_rb.csv", "WR": "proj_wr.csv",
 KICKER_FG_PTS = 3.5   # blended value of one made FG across §4 bands; tunable
 GAMES = 17
 
-# stat -> column index (Player is column 0) per position
-COLS = {
-    "QB": {"pass_yds": 3, "pass_td": 4, "pass_int": 5, "rush_yds": 7,
-           "rush_td": 8, "fumbles_lost": 9},
-    "RB": {"rush_yds": 2, "rush_td": 3, "rec": 4, "rec_yds": 5, "rec_td": 6,
-           "fumbles_lost": 7},
-    "WR": {"rec": 1, "rec_yds": 2, "rec_td": 3, "rush_yds": 5, "rush_td": 6,
-           "fumbles_lost": 7},
-    "TE": {"rec": 1, "rec_yds": 2, "rec_td": 3, "fumbles_lost": 4},
-    "K":  {"fg": 1, "fga": 2, "xpm": 3},
-    "DST": {"sack": 1, "int": 2, "fr": 3, "ff": 4, "td": 5, "safety": 6, "pa": 7},
-}
-FPTS_COL = {"QB": 10, "RB": 8, "WR": 8, "TE": 5, "K": 4, "DST": 9}
-
 DST_NAME_TO_ABBR = {
     "Arizona Cardinals": "ARI", "Atlanta Falcons": "ATL", "Baltimore Ravens": "BAL",
     "Buffalo Bills": "BUF", "Carolina Panthers": "CAR", "Chicago Bears": "CHI",
@@ -69,16 +55,50 @@ def _num(s: str) -> float:
         return 0.0
 
 
-def _data_rows(path: str):
+def _header_and_rows(path: str):
+    """(UPPERCASED header cells, data rows after it). FantasyPros exports carry a
+    title/group row or two before the real 'Player,…' header."""
     with open(path, newline="", encoding="utf-8") as f:
         rows = list(csv.reader(f))
-    hi = next(i for i, r in enumerate(rows) if r and r[0].strip() == "Player")
-    return rows[hi + 1:]
+    hi = next(i for i, r in enumerate(rows) if r and r[0].strip().lower() == "player")
+    return [c.strip().upper() for c in rows[hi]], rows[hi + 1:]
 
 
-def _stat_line(pos: str, cells: list[str]) -> dict:
-    c = COLS[pos]
-    return {k: _num(cells[i]) for k, i in c.items()}
+def _stat_line(pos: str, header: list[str], cells: list[str]) -> dict:
+    """Pull stats by column NAME, anchored on marker columns — survives added
+    columns (Team/CMP/ATT) and block reordering across export versions. YDS/TDS
+    repeat for passing/rushing/receiving: the passing block ends at INTS, and each
+    rushing/receiving block starts at ATT/REC."""
+    def val(i):
+        return _num(cells[i]) if (i is not None and i < len(cells)) else 0.0
+
+    def idx(name, after=-1):
+        for i, h in enumerate(header):
+            if h == name and i > after:
+                return i
+        return None
+
+    if pos == "QB":
+        it = idx("INTS")
+        return {"pass_yds": val(idx("YDS")), "pass_td": val(idx("TDS")),
+                "pass_int": val(it),
+                "rush_yds": val(idx("YDS", it) if it is not None else None),
+                "rush_td": val(idx("TDS", it) if it is not None else None),
+                "fumbles_lost": val(idx("FL"))}
+    if pos in ("RB", "WR"):
+        a, r = idx("ATT"), idx("REC")
+        return {"rush_yds": val(idx("YDS", a)), "rush_td": val(idx("TDS", a)),
+                "rec": val(r), "rec_yds": val(idx("YDS", r)),
+                "rec_td": val(idx("TDS", r)), "fumbles_lost": val(idx("FL"))}
+    if pos == "TE":
+        r = idx("REC")
+        return {"rec": val(r), "rec_yds": val(idx("YDS", r)),
+                "rec_td": val(idx("TDS", r)), "fumbles_lost": val(idx("FL"))}
+    if pos == "K":
+        return {"fg": val(idx("FG")), "fga": val(idx("FGA")), "xpm": val(idx("XPT"))}
+    return {k: val(idx(nm)) for k, nm in (
+        ("sack", "SACK"), ("int", "INT"), ("fr", "FR"), ("ff", "FF"),
+        ("td", "TD"), ("safety", "SAFETY"), ("pa", "PA"))}
 
 
 def proj_points_for(pos: str, line: dict) -> float:
@@ -94,22 +114,30 @@ def proj_points_for(pos: str, line: dict) -> float:
 def load_projections(snap_dir: str) -> list[dict]:
     out = []
     for pos, fn in FILES.items():
-        for cells in _data_rows(os.path.join(snap_dir, fn)):
+        header, rows = _header_and_rows(os.path.join(snap_dir, fn))
+        team_col = next((i for i, h in enumerate(header) if h == "TEAM"), None)
+        fpts_col = next((i for i, h in enumerate(header) if h == "FPTS"), None)
+        for cells in rows:
             if not cells or not cells[0].strip():
                 continue
             if "more rows removed" in cells[0]:
                 continue
             player = cells[0].strip()
-            if pos == "DST":
+            if team_col is not None and team_col < len(cells) and cells[team_col].strip():
+                name, team = player, cells[team_col].strip()      # separate Team column
+                if pos == "DST":
+                    team = DST_NAME_TO_ABBR.get(player, team)
+            elif pos == "DST":
                 name, team = player, DST_NAME_TO_ABBR.get(player, "")
-            else:
+            else:                                                  # old export: "Name TEAM"
                 toks = player.split()
                 name, team = " ".join(toks[:-1]), toks[-1]
-            line = _stat_line(pos, cells)
+            line = _stat_line(pos, header, cells)
             out.append({
                 "name": name, "team": team, "pos": pos,
                 "proj_points": round(proj_points_for(pos, line), 2),
-                "file_fpts": _num(cells[FPTS_COL[pos]]) if len(cells) > FPTS_COL[pos] else 0.0,
+                "file_fpts": (_num(cells[fpts_col]) if fpts_col is not None
+                              and fpts_col < len(cells) else 0.0),
                 "rec": line.get("rec", 0.0),
             })
     return out
