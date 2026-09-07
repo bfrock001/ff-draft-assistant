@@ -53,7 +53,7 @@ pos_f = st.segmented_control(
     default="All") or "All"
 fc = st.columns([3, 1])
 search = fc[0].text_input("Search", placeholder="player name…")
-hide_drafted = fc[1].checkbox("Hide drafted", value=False)
+hide_drafted = fc[1].checkbox("Hide drafted", value=True)
 
 view = board.copy()
 if pos_f == "FLEX":

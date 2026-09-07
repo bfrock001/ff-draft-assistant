@@ -540,46 +540,60 @@ with left:
     if ds.is_complete():
         st.dataframe(table, hide_index=True, width="stretch", height=460)
     else:
-        st.caption("Click a player's row, then **Draft** (one pick at a time).")
-        # key changes per pick and per filter so the selection never points at
-        # a stale row after a pick or a filter change.
+        st.caption("Tick the **draft?** box for one or more players, then **Draft** — "
+                   "check several to mark a fast run at once (drafted top-down in board "
+                   "order). No select-all, so a stray click can't grab the board.")
+        # key changes per pick and per filter so ticks never carry over stale after
+        # a pick or a filter change.
         board_key = f"board_{ds.current_pick}_{pos_filter}_{search}"
+        edit_tbl = table.copy()
+        edit_tbl.insert(0, "draft?", False)
 
-        def draft_bar(selected, bar_key, empty_hint=False):
-            if not selected:
+        def draft_bar(rows, bar_key, empty_hint=False):
+            n = len(rows)
+            if n == 0:
                 if empty_hint:
-                    st.caption("Click a player's row in the board below, then Draft.")
+                    st.caption("Tick a player's **draft?** box in the board below.")
                 return
-            p = selected[0]
-            st.caption(f"**{p['name']}** — {p['pos']} {p['team']} → pick {ds.current_pick}")
-            if st.button(f"Draft {p['name']}", type="primary", key=bar_key,
-                         width="stretch"):
-                cid = p["canonical_id"]
-                if not isinstance(cid, str):
-                    cid = f"NM_{p['name']}"
-                ds.make_pick(cid, p["name"], p["pos"])   # team auto = pick order
+            if n == 1:
+                p = view.iloc[rows[0]]
+                st.caption(f"**{p['name']}** — {p['pos']} {p['team']} → pick {ds.current_pick}")
+                label = p["name"]
+            else:
+                st.caption(f"**{n} to draft** → picks {ds.current_pick}–"
+                           f"{ds.current_pick + n - 1} (board order): "
+                           + ", ".join(view.iloc[i]["name"] for i in rows))
+                label = f"these {n}"
+            if st.button(f"Draft {label}", type="primary", key=bar_key, width="stretch"):
+                for i in rows:
+                    p = view.iloc[i]
+                    cid = p["canonical_id"]
+                    if not isinstance(cid, str):
+                        cid = f"NM_{p['name']}"
+                    ds.make_pick(cid, p["name"], p["pos"])   # team auto = pick order
                 ds.save(SP)
                 st.rerun()
 
         top_bar = st.container()          # rendered ABOVE the board
-        # single-row selection — no "select all" header checkbox, so a stray click
-        # can never mass-draft the board.
-        sel = st.dataframe(
-            table, hide_index=True, width="stretch", height=420,
-            on_select="rerun", selection_mode="single-row", key=board_key)
-        selrows = sel.selection["rows"] if sel and sel.selection else []
-        selected = [view.iloc[i] for i in selrows]
+        # per-row "draft?" checkboxes — multi-select WITHOUT a select-all header.
+        edited = st.data_editor(
+            edit_tbl, hide_index=True, width="stretch", height=420, num_rows="fixed",
+            key=board_key,
+            disabled=[c for c in edit_tbl.columns if c != "draft?"],
+            column_config={"draft?": st.column_config.CheckboxColumn(
+                "draft?", default=False, width="small")})
+        rows = [i for i, v in enumerate(edited["draft?"].tolist()) if v]
 
-        # the selection also drives the Player-detail stats below
-        if selrows:
-            picked_name = view.iloc[selrows[0]]["name"]
+        # a single tick also drives the Player-detail stats below
+        if len(rows) == 1:
+            picked_name = view.iloc[rows[0]]["name"]
             if st.session_state.get("_last_board_sel") != picked_name:
                 st.session_state._last_board_sel = picked_name
                 st.session_state.detail_player = picked_name
 
         with top_bar:
-            draft_bar(selected, "draft_top", empty_hint=True)
-        draft_bar(selected, "draft_bottom")
+            draft_bar(rows, "draft_top", empty_hint=True)
+        draft_bar(rows, "draft_bottom")
 
 with right:
     st.markdown("#### My roster")
